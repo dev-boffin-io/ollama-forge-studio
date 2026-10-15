@@ -1,0 +1,54 @@
+name: build-binaries
+
+# Runs on EVERY commit pushed to any branch, on pull requests, on v* tags (which also publish a GitHub release),
+# and manually from the Actions tab.
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write        # needed only to attach binaries to a release on v* tags
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true   # a newer commit on the same branch supersedes the running build
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm run check
+
+  build:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  asset: ollama-forge-studio-linux-x64 }
+          - { os: macos-latest,   asset: ollama-forge-studio-macos-arm64 }
+          - { os: windows-latest, asset: ollama-forge-studio-windows-x64.exe }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm run build
+      - name: Rename binary
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then mv dist/ollama-forge-studio.exe "dist/${{ matrix.asset }}"; else mv dist/ollama-forge-studio "dist/${{ matrix.asset }}"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "${{ matrix.asset }}-${{ github.sha }}"
+          path: "dist/${{ matrix.asset }}"
+          retention-days: 30
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with: { files: "dist/${{ matrix.asset }}" }

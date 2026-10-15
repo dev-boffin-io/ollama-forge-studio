@@ -1,0 +1,6 @@
+config.json
+workspace/*
+!workspace/.gitkeep
+node_modules/
+*.log
+dist/

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ollama Forge Studio</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◈</span>
+      <div>
+        <h1>Ollama Forge Studio</h1>
+        <p class="sub"><span id="workDir" class="workdir" title="Click to change directory">…</span></p>
+      </div>
+    </div>
+    <div class="conn">
+      <label>Endpoint
+        <input id="endpoint" type="url" spellcheck="false" placeholder="http://localhost:11434 or https://xxx.trycloudflare.com" />
+      </label>
+      <button id="providersBtn" class="btn ghost" title="Manage providers (Ollama / OpenAI / Anthropic / Gemini / Groq, API keys)">Providers</button>
+      <label>Model
+        <select id="model"></select>
+      </label>
+      <button id="refreshModels" class="btn ghost" title="Reload models from all providers">↻</button>
+      <button id="statusBtn" class="btn ghost" title="MCP servers, LSP, skills">Tools</button>
+      <button id="saveConfig" class="btn primary">Save</button>
+      <span id="connStatus" class="status">idle</span>
+      <span id="metricsBadge" class="status metrics" title="Context used / generation speed (last step)" hidden></span>
+      <button id="quitBtn" class="btn ghost danger" title="Stop the studio server">Quit</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="pane sessions">
+      <div class="pane-head">
+        <h2>Sessions</h2>
+        <button id="newSession" class="btn small">+ New</button>
+      </div>
+      <ul id="sessionList" class="list"></ul>
+    </aside>
+
+    <section class="pane files">
+      <div class="pane-head">
+        <h2 id="filesTitle">Files</h2>
+        <div class="row">
+          <button id="refreshTree" class="btn small ghost">↻</button>
+          <button id="newFile" class="btn small">+ File</button>
+        </div>
+      </div>
+      <ul id="tree" class="tree"></ul>
+    </section>
+
+    <section class="pane editor">
+      <div class="pane-head">
+        <h2 id="editorTitle">No file open</h2>
+        <div class="row">
+          <span id="dirtyDot" class="dirty" title="Unsaved changes"></span>
+          <button id="saveFile" class="btn small primary" disabled>Save</button>
+        </div>
+      </div>
+      <textarea id="editor" spellcheck="false" placeholder="Select a file to view and edit its contents."></textarea>
+    </section>
+
+    <section class="pane chat">
+      <div class="pane-head">
+        <div class="row">
+          <h2>Agent</h2>
+          <select id="agent" title="Switch agent (build = full access, plan = read-only)"></select>
+        </div>
+        <div class="row">
+          <button id="undoBtn" class="btn small ghost" title="Undo the last turn (restores files the agent changed)">Undo</button>
+          <button id="redoBtn" class="btn small ghost" title="Redo">Redo</button>
+          <button id="forkSession" class="btn small ghost" title="Branch this session">Fork</button>
+          <button id="compactSession" class="btn small ghost" title="Summarise old context">Compact</button>
+          <button id="summariesBtn" class="btn small ghost" title="Read the summaries of this session (/summaries)">Summaries</button>
+        </div>
+      </div>
+      <div id="todos" class="todos" hidden></div>
+      <div id="messages" class="messages"></div>
+      <div id="cmdHint" class="cmdhint" hidden></div>
+      <div id="attachBar" class="attachbar" hidden></div>
+      <form id="chatForm" class="composer">
+        <button id="attachBtn" class="btn ghost attach-btn" type="button" title="Attach files (any type) — or drop / paste them here">📎</button>
+        <input id="fileInput" type="file" multiple hidden />
+        <textarea id="prompt" rows="2" placeholder="Describe what to build or change…  (/ for commands, Enter = send, Shift+Enter = newline)"></textarea>
+        <button id="send" class="btn primary" type="submit">Send</button>
+      </form>
+    </section>
+  </main>
+
+  <dialog id="providersDlg" class="dlg">
+    <h3>Providers</h3>
+    <p class="hint-line">Model refs look like <code>provider/model</code>. Ollama (API key optional), OpenAI, Anthropic, Google Gemini, Groq, OpenRouter and any OpenAI-compatible API work. Pick a <b>Preset</b> to fill the endpoint, then paste your API key.</p>
+    <div id="providerRows"></div>
+    <div class="row dlg-actions">
+      <button id="addProvider" class="btn small">+ Add provider</button>
+      <span class="spacer"></span>
+      <button id="providersCancel" class="btn small ghost">Cancel</button>
+      <button id="providersSave" class="btn small primary">Save</button>
+    </div>
+  </dialog>
+
+  <dialog id="statusDlg" class="dlg">
+    <h3>Tools &amp; integrations</h3>
+    <div id="statusBody"></div>
+    <div class="row dlg-actions">
+      <button id="mcpReload" class="btn small">Reload MCP</button>
+      <span class="spacer"></span>
+      <button id="statusClose" class="btn small ghost">Close</button>
+    </div>
+  </dialog>
+
+  <div id="ctxMenu" class="ctxmenu" hidden></div>
+
+  <dialog id="editDlg" class="dlg">
+    <h3 id="editTitle">Edit message</h3>
+    <textarea id="editText" rows="10" spellcheck="false"></textarea>
+    <div class="row dlg-actions">
+      <span id="editNote" class="hint-line"></span>
+      <span class="spacer"></span>
+      <button id="editCancel" class="btn small ghost" type="button">Cancel</button>
+      <button id="editSave" class="btn small primary" type="button">Save</button>
+    </div>
+  </dialog>
+
+  <dialog id="summariesDlg" class="dlg">
+    <h3>Summaries</h3>
+    <div id="summariesBody"></div>
+    <div class="row dlg-actions">
+      <button id="exportFromSummaries" class="btn small">Export full session (.md)</button>
+      <span class="spacer"></span>
+      <button id="summariesClose" class="btn small ghost">Close</button>
+    </div>
+  </dialog>
+
+  <script src="/markdown.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

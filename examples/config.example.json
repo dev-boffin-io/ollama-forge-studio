@@ -1,0 +1,22 @@
+{
+  "endpoint": "http://localhost:11434",
+  "model": "default/qwen2.5-coder:14b",
+  "smallModel": "",
+  "numCtx": 0,
+  "providers": {
+    "openrouter": { "type": "openai", "endpoint": "https://openrouter.ai/api/v1", "apiKeyEnv": "OPENROUTER_API_KEY" },
+    "lmstudio":   { "type": "openai", "endpoint": "http://localhost:1234/v1", "contextWindow": 32768 }
+  },
+  "mcp": {
+    "filesystem": { "type": "local",  "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."] },
+    "docs":       { "type": "remote", "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer TOKEN" } }
+  },
+  "lsp": { "typescript": { "disabled": false } },
+  "websearch": { "provider": "exa" },
+  "permission": {
+    "edit": "allow",
+    "bash": { "*": "ask", "npm test*": "allow", "git status*": "allow", "rm *": "deny" },
+    "mcp": { "*": "ask", "filesystem_read*": "allow" },
+    "webfetch": "allow"
+  }
+}
