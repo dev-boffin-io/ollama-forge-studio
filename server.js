@@ -501,7 +501,7 @@ const startup = { sessionId: null, agent: args.agent || null };
     });
     server.listen(port, args.host, () => {
       console.log(`ollama-forge-studio  dir: ${workDir}`);
-      console.log(`               url: http://${args.host}:${port}${startup.sessionId ? `   (resuming ${startup.sessionId})` : ''}`);
+      console.log(`               url: http://${args.host}:${server.address().port}${startup.sessionId ? `   (resuming ${startup.sessionId})` : ''}`);
     });
   };
   tryListen(0);

@@ -52,13 +52,25 @@ npm run build            # → dist/ollama-forge-studio  (dist/ollama-forge-stud
 ```
 
 - Needs **Node ≥ 20.12** (22+ recommended) on the *build* machine; the binary embeds that Node runtime (~100 MB).
-- It can't cross-compile: build on each OS/arch you target. `.github/workflows/release.yml` runs on **every commit** (any branch) and on pull requests: first `npm run check` (syntax + module load),
+- It can't cross-compile: build on each OS/arch you target. `.github/workflows/release.yml` runs on **every commit** (any branch) and   on pull requests: first `npm run check` (syntax + module load) and `npm test`,
   then builds Linux, macOS and Windows binaries, kept as run artifacts for 30 days. Pushing a `v*` tag also attaches them to a GitHub release;
   it can be started manually from the Actions tab too.
 - The UI (`public/*`) is embedded in the binary. Without a source tree, the global `config.json` is read/written at
   `~/.config/ollama-studio/config.json` (`$XDG_CONFIG_HOME` honoured) next to your global agents/commands/skills.
   Per-project data still lives in `~/.studio/<project>/`.
 - `git` is still needed on PATH for snapshots/undo (as in source mode); the studio runs fine without it.
+
+## Tests
+
+```bash
+npm test        # Node's built-in test runner (zero dependencies): unit tests + a real server boot smoke test
+```
+
+Covers the permission rule engine, fuzzy `edit_file` matching, path-safe workspace ops (incl. symlink escapes),
+config layering, sessions (fork / archive / export), provider resolution and key masking, the XSS-safe markdown
+renderer, attachment classification, skills, tool visibility per agent, and an end-to-end HTTP API check against a
+live `server.js`. Every test file runs in its own process with a throwaway `OLLAMA_STUDIO_HOME` — nothing in your
+real `~/.studio/` or `config.json` is touched.
 
 ## Attachments (any file type)
 
@@ -369,4 +381,5 @@ lib/web.js           webfetch / websearch
 lib/snapshot.js      shadow-git snapshots
 lib/procs.js         foreground/background process management
 public/              UI
+test/                unit + smoke tests (`npm test`, node --test)
 ```
