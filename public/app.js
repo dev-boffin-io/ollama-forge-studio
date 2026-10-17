@@ -34,18 +34,40 @@ function showMetrics({ ctx, used, tps }) {
   el.textContent = parts.join(' · ');
 }
 
+/**
+ * fetch + JSON with a timeout, readable errors, and one automatic retry for GETs on a network hiccup
+ * (first contact after the server/tunnel was idle often fails once).
+ */
 async function api(path, options = {}) {
-  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
-  const text = await res.text();
-  let data;
-  try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
+  const { timeoutMs = 60000, retry = (options.method || 'GET') === 'GET', ...rest } = options;
+  let lastErr;
+  for (let attempt = 0; attempt < (retry ? 2 : 1); attempt++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, signal: ac.signal, ...rest });
+      const text = await res.text();
+      let data;
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+      if (!res.ok) {
+        const err = new Error(data.error || (res.status >= 502 ? `the studio server is not answering (HTTP ${res.status})` : `HTTP ${res.status}`));
+        err.status = res.status;
+        if (res.status < 500) throw err;                      // 4xx: retrying will not help
+        lastErr = err;
+      } else return data;
+    } catch (err) {
+      if (err.status && err.status < 500) throw err;
+      lastErr = err.name === 'AbortError' ? new Error(`the server did not answer within ${Math.round(timeoutMs / 1000)}s`) : err.status ? err : new Error('cannot reach the studio server — is it still running?');
+    } finally { clearTimeout(timer); }
+    if (attempt === 0 && retry) await new Promise((r) => setTimeout(r, 700));
+  }
+  throw lastErr;
 }
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const truncate = (s, n) => (s.length > n ? s.slice(0, n) + '…' : s);
-const scrollChat = () => { $('messages').scrollTop = $('messages').scrollHeight; };
+let bulkRender = false;      // while a whole session is drawn, skip per-message scrolling (each scroll forces a layout)
+const scrollChat = () => { if (!bulkRender) $('messages').scrollTop = $('messages').scrollHeight; };
 
 function ago(ts) {
   const s = Math.max(1, Math.round((Date.now() - ts) / 1000));
@@ -63,28 +85,48 @@ async function loadConfig() {
   state.model = state.config.model || '';
 }
 
-async function loadModels() {
-  setStatus('loading models…', 'busy');
-  try {
-    const { models } = await api('/api/models');
-    const select = $('model');
-    select.innerHTML = '';
-    const groups = new Map();
-    for (const m of models) {
-      if (!groups.has(m.provider)) { const g = document.createElement('optgroup'); g.label = m.provider + (m.providerType === 'openai' ? ' (OpenAI-compatible)' : m.providerType === 'anthropic' ? ' (Anthropic)' : ' (Ollama)'); groups.set(m.provider, g); }
-      const o = document.createElement('option');
-      if (m.error) { o.textContent = '⚠ ' + m.error.slice(0, 60); o.disabled = true; } else { o.value = m.ref; o.textContent = m.name + (m.parameter_size ? `  (${m.parameter_size})` : ''); }
-      groups.get(m.provider).appendChild(o);
-    }
-    [...groups.values()].sort((a, b) => a.label.localeCompare(b.label)).forEach((g) => select.appendChild(g));
-    const refs = models.filter((m) => m.ref).map((m) => m.ref);
-    const want = refs.includes(state.model) ? state.model : refs.includes('default/' + state.model) ? 'default/' + state.model : refs[0];
-    if (want) { select.value = want; state.model = want; }
-    setStatus(refs.length ? 'ready' : 'no models', refs.length ? 'ok' : 'err');
-  } catch (err) {
-    setStatus('provider error', 'err');
-    $('model').innerHTML = `<option value="">${escapeHtml(err.message)}</option>`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let modelRetryTimer = null;
+
+/**
+ * Fill the model list. The first contact with a fresh tunnel / sleeping server often fails once, so this tries a few times
+ * (showing progress), and if nothing answers it keeps retrying quietly in the background instead of leaving the page dead.
+ */
+async function loadModels({ autoRetry = true } = {}) {
+  clearTimeout(modelRetryTimer);
+  const select = $('model');
+  let models = null;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3 && !models; attempt++) {
+    setStatus(attempt === 1 ? 'connecting…' : `connecting… (try ${attempt}/3)`, 'busy');
+    try { models = (await api('/api/models', { timeoutMs: 45000, retry: false })).models || []; } catch (err) { lastErr = err; if (attempt < 3) await sleep(1200 * attempt); }
   }
+  if (!models) {
+    setStatus('cannot connect', 'err');
+    select.innerHTML = `<option value="">⚠ ${escapeHtml(lastErr ? lastErr.message : 'no answer')} (retrying…)</option>`;
+    if (autoRetry) modelRetryTimer = setTimeout(() => loadModels({ autoRetry: true }), 10000);
+    return false;
+  }
+  select.innerHTML = '';
+  const groups = new Map();
+  for (const m of models) {
+    if (!groups.has(m.provider)) { const g = document.createElement('optgroup'); g.label = m.provider + (m.providerType === 'openai' ? ' (OpenAI-compatible)' : m.providerType === 'anthropic' ? ' (Anthropic)' : ' (Ollama)'); groups.set(m.provider, g); }
+    const o = document.createElement('option');
+    if (m.error) { o.textContent = '⚠ ' + m.error.slice(0, 80); o.title = m.error; o.disabled = true; } else { o.value = m.ref; o.textContent = m.name + (m.parameter_size ? `  (${m.parameter_size})` : ''); }
+    groups.get(m.provider).appendChild(o);
+  }
+  [...groups.values()].sort((a, b) => a.label.localeCompare(b.label)).forEach((g) => select.appendChild(g));
+  const refs = models.filter((m) => m.ref).map((m) => m.ref);
+  const want = refs.includes(state.model) ? state.model : refs.includes('default/' + state.model) ? 'default/' + state.model : refs[0];
+  if (want) { select.value = want; state.model = want; }
+  const stale = models.find((m) => m.stale);
+  const failed = models.filter((m) => m.error);
+  if (!refs.length) {
+    setStatus('no models', 'err');
+    if (autoRetry && failed.length) modelRetryTimer = setTimeout(() => loadModels({ autoRetry: true }), 10000);   // e.g. the tunnel is still starting
+  } else if (stale) { setStatus('ready (cached list)', 'busy'); $('connStatus').title = 'The server did not answer; showing the last known models. ' + stale.stale; }
+  else { setStatus('ready', 'ok'); $('connStatus').title = failed.length ? failed.map((f) => `${f.provider}: ${f.error}`).join('\n') : ''; }
+  return true;
 }
 
 async function saveConfig() {
@@ -145,7 +187,7 @@ async function refreshContext(sessionId) {
     const c = await api('/api/context?' + q);
     if (sessionId !== state.sessionId) return;           // user switched meanwhile
     if (c.ctx > 0) showMetrics({ ctx: c.ctx, used: c.used, tps: c.tps }); else $('metricsBadge').hidden = true;
-  } catch { /* badge is best-effort */ }
+  } catch (e) { console.debug('context badge not updated', e); }
 }
 
 function newSession() {
@@ -182,39 +224,57 @@ async function openSession(id) {
   if (s.running && !state.streaming) startStream((signal) => fetch(`/api/sessions/${s.id}/attach`, { signal }));
 }
 
-function renderSession(s) {
+const RENDER_WINDOW = 60;    // messages drawn at once; older ones are one click away (long sessions froze the page otherwise)
+
+function renderSession(s, from = null) {
   const box = $('messages');
-  box.innerHTML = '';
+  const messages = s.messages || [];
+  state.messages = messages;                          // message menu (Edit / Resend) maps DOM bubbles back to these by index
+  state.renderFrom = from == null ? Math.max(0, messages.length - RENDER_WINDOW) : Math.max(0, from);
+  const start = state.renderFrom;
+  box.replaceChildren();
   const cards = new Map();
-  state.messages = s.messages;                       // message menu (Edit / Resend) maps DOM bubbles back to these by index
-  for (let i = 0; i < s.messages.length; i++) {
-    const m = s.messages[i];
-    if (m.role === 'user') {
-      if (!m.summary) { const el = addMessage('user', userText(m)); el.dataset.idx = i; decorateUser(el, m.attachments); }
-      else addSummaryBlock(m.content.replace(/^Summary of the earlier conversation:\n/, ''));
+  bulkRender = true;
+  try {
+    if (start > 0) {
+      const more = document.createElement('button');
+      more.className = 'btn small ghost more-msgs';
+      more.textContent = `↑ Show ${Math.min(RENDER_WINDOW, start)} earlier messages (${start} hidden)`;
+      more.addEventListener('click', () => { const keep = box.scrollHeight - box.scrollTop; renderSession({ messages }, start - RENDER_WINDOW); box.scrollTop = box.scrollHeight - keep; });
+      box.appendChild(more);
     }
-    else if (m.role === 'assistant') {
-      if (m.thinking && !m.summary) { const t = addThinkingBlock(); t.style.display = ''; t.open = false; setThinking(t, m.thinking); }
-      if (m.content && !m.summary) addMessage('assistant', m.content).dataset.idx = i;
-      for (const c of m.tool_calls || []) {
-        const { card, body } = addToolCard(c.function.name, c.function.arguments);
-        body.innerHTML = `<pre>${escapeHtml(JSON.stringify(c.function.arguments, null, 2))}</pre>`;
-        cards.set(c.id, { card, body });
-      }
-    } else if (m.role === 'tool') {
-      const c = cards.get(m.tool_call_id);
-      if (c) {
-        let ok = true;
-        try { ok = !JSON.parse(m.content).error; } catch { /* keep ok */ }
-        let parsed = m.content;
-        try { parsed = JSON.parse(m.content); } catch { /* raw */ }
-        c.body.innerHTML += resultHtml(parsed, ok);
-        c.card.classList.add(ok ? 'ok' : 'err');
-      }
+    for (let i = start; i < messages.length; i++) {
+      try { renderOneMessage(messages[i], i, cards); } catch (e) { console.error('could not draw message', i, e); }
     }
-  }
-  if (!s.messages.length) addHint();
+    if (!messages.length) addHint();
+  } finally { bulkRender = false; }
   scrollChat();
+}
+
+function renderOneMessage(m, i, cards) {
+  if (m.role === 'user') {
+    if (!m.summary) { const el = addMessage('user', userText(m)); el.dataset.idx = i; decorateUser(el, m.attachments); }
+    else addSummaryBlock(m.content.replace(/^Summary of the earlier conversation:\n/, ''));
+  } else if (m.role === 'assistant') {
+    if (m.thinking && !m.summary) { const t = addThinkingBlock(); t.style.display = ''; t.open = false; setThinking(t, m.thinking); }
+    if (m.content && !m.summary) addMessage('assistant', m.content).dataset.idx = i;
+    for (const c of m.tool_calls || []) {
+      const { card, body } = addToolCard(c.function.name, c.function.arguments);
+      body.innerHTML = `<pre>${escapeHtml(truncate(JSON.stringify(c.function.arguments, null, 2), 6000))}</pre>`;
+      cards.set(c.id, { card, body });
+    }
+  } else if (m.role === 'tool') {
+    const c = cards.get(m.tool_call_id);
+    if (!c) return;
+    const raw = String(m.content || '');
+    let parsed = raw.length > 30000 ? raw.slice(0, 1200) + `… (${(raw.length - 1200).toLocaleString()} more characters)` : raw;   // huge results are not parsed/drawn in full
+    let ok = true;
+    if (raw.length <= 30000) {
+      try { parsed = JSON.parse(raw); ok = !(parsed && parsed.error); } catch { /* plain text result */ }
+    } else ok = !/^\s*\{\s*"error"/.test(raw);
+    c.body.innerHTML += resultHtml(parsed, ok);
+    c.card.classList.add(ok ? 'ok' : 'err');
+  }
 }
 
 function renderTodos(todos) {
@@ -269,6 +329,7 @@ async function changeDir() {
     const r = await api('/api/workdir', { method: 'POST', body: JSON.stringify({ dir }) });
     state.workDir = r.workDir;
     state.activeFile = null;
+    treeState.expanded.clear(); treeState.cache.clear();
     $('editor').value = '';
     $('editorTitle').textContent = 'No file open';
     showWorkDir();
@@ -281,34 +342,68 @@ async function changeDir() {
   } catch (err) { alert(err.message); }
 }
 
-async function loadTree() {
-  const { tree } = await api('/api/tree');
-  renderTree(tree);
+/* ---------- file tree: one folder level at a time (expanding is lazy, so huge folders never freeze the page) ---------- */
+
+const treeState = { expanded: new Set(), cache: new Map() };     // expanded folder paths; path -> { entries, truncated }
+
+async function fetchDir(rel) {
+  const d = await api('/api/tree?path=' + encodeURIComponent(rel));
+  treeState.cache.set(rel, { entries: d.entries || [], truncated: d.truncated || 0 });
+  return treeState.cache.get(rel);
 }
 
-function renderTree(tree) {
+/** Reload the root and every expanded folder (in parallel), then redraw. A folder that vanished is simply collapsed. */
+async function loadTree() {
+  const dirs = ['', ...treeState.expanded];
+  await Promise.all(dirs.map((d) => fetchDir(d).catch((e) => { if (d) treeState.expanded.delete(d); else throw e; })));
+  renderTree();
+}
+
+function renderTree() {
   const ul = $('tree');
-  ul.innerHTML = '';
-  if (!tree.length) ul.innerHTML = '<li class="hint" style="cursor:default">Empty directory.</li>';
-  const walk = (nodes, depth) => {
-    for (const node of nodes) {
+  const frag = document.createDocumentFragment();
+  const root = treeState.cache.get('');
+  if (!root || !root.entries.length) { const li = document.createElement('li'); li.className = 'hint'; li.style.cursor = 'default'; li.textContent = 'Empty directory.'; frag.appendChild(li); }
+  const walk = (rel, depth) => {
+    const level = treeState.cache.get(rel);
+    if (!level) return;
+    for (const node of level.entries) {
       const li = document.createElement('li');
       li.style.paddingLeft = 6 + depth * 14 + 'px';
       if (node.type === 'dir') {
-        li.className = 'dir';
-        li.textContent = '▸ ' + node.name;
-        ul.appendChild(li);
-        walk(node.children || [], depth + 1);
+        const open = treeState.expanded.has(node.path);
+        li.className = 'dir' + (node.heavy ? ' heavy' : '');
+        li.textContent = (open ? '▾ ' : '▸ ') + node.name;
+        li.title = node.heavy ? 'dependency/cache folder — expand only if you need it' : node.path;
+        li.addEventListener('click', () => toggleDir(node.path));
+        frag.appendChild(li);
+        if (open) walk(node.path, depth + 1);
       } else {
         li.className = node.path === state.activeFile ? 'active' : '';
+        li.dataset.path = node.path;
         li.textContent = node.name;
         li.title = node.path;
-        li.addEventListener('click', () => openFile(node.path));
-        ul.appendChild(li);
+        li.addEventListener('click', () => openFile(node.path).catch((e) => setStatus(e.message, 'err')));
+        frag.appendChild(li);
       }
     }
+    if (level.truncated) { const li = document.createElement('li'); li.className = 'hint'; li.style.cssText = `cursor:default;padding-left:${6 + depth * 14}px`; li.textContent = `… ${level.truncated} more not shown`; frag.appendChild(li); }
   };
-  walk(tree, 0);
+  walk('', 0);
+  ul.replaceChildren(frag);
+}
+
+async function toggleDir(rel) {
+  try {
+    if (treeState.expanded.has(rel)) treeState.expanded.delete(rel);
+    else { treeState.expanded.add(rel); if (!treeState.cache.has(rel)) await fetchDir(rel); }
+    renderTree();
+  } catch (e) { treeState.expanded.delete(rel); setStatus('cannot open folder: ' + e.message, 'err'); }
+}
+
+/** Highlight the open file without rebuilding the tree. */
+function markActiveFile() {
+  document.querySelectorAll('#tree li').forEach((li) => { if (li.dataset.path) li.classList.toggle('active', li.dataset.path === state.activeFile); });
 }
 
 async function openFile(relPath) {
@@ -318,7 +413,7 @@ async function openFile(relPath) {
   $('editorTitle').textContent = relPath;
   $('saveFile').disabled = false;
   setDirty(false);
-  loadTree();
+  markActiveFile();
 }
 
 async function saveFile() {
@@ -344,7 +439,7 @@ function resultHtml(result, ok) {
   const color = ok ? 'var(--green)' : 'var(--red)';
   let html = '';
   if (result && typeof result.diff === 'string') {
-    html += '<div class="diff">' + escapeHtml(result.diff).split('\n').map((l) =>
+    html += '<div class="diff">' + escapeHtml(truncate(result.diff, 40000)).split('\n').slice(0, 800).map((l) =>
       `<div class="${l.startsWith('+ ') ? 'add' : l.startsWith('- ') ? 'del' : 'hunk'}">${l}</div>`).join('') + '</div>';
     const { diff, ...rest } = result;
     result = rest;
@@ -392,16 +487,29 @@ const setThinking = (el, text) => { el.querySelector('.tbody').textContent = tex
 
 // markdown re-render is throttled to one per animation frame while tokens stream in
 const pendingRender = new Map();
+const lastRender = new WeakMap();
 function renderSoon(el, text) {
   const had = pendingRender.has(el);
   pendingRender.set(el, text);
   if (had) return;
-  requestAnimationFrame(() => {
+  // re-parsing a long answer as markdown on every frame is O(n²): slow the cadence down as the text grows
+  const wait = Math.max(0, (text.length > 20000 ? 700 : text.length > 6000 ? 350 : text.length > 2000 ? 120 : 0) - (Date.now() - (lastRender.get(el) || 0)));
+  const run = () => requestAnimationFrame(() => {
     const t = pendingRender.get(el);
     pendingRender.delete(el);
-    setMessageText(el, t);
+    lastRender.set(el, Date.now());
+    try { setMessageText(el, t); } catch (e) { console.error('markdown render failed', e); el.textContent = t; }
     scrollChat();
   });
+  if (wait > 0) setTimeout(run, wait); else run();
+}
+
+const pendingThink = new Map();
+function thinkSoon(el, text) {
+  const had = pendingThink.has(el);
+  pendingThink.set(el, text);
+  if (had) return;
+  setTimeout(() => { const t = pendingThink.get(el); pendingThink.delete(el); setThinking(el, text.length > 30000 ? '…' + t.slice(-30000) : t); scrollChat(); }, 120);
 }
 
 function summarizeArgs(args) {
@@ -505,8 +613,7 @@ async function consumeRun(res) {
         if (thinkingText.trim()) {
           if (!thinkingEl) thinkingEl = addThinkingBlock();
           thinkingEl.style.display = '';
-          setThinking(thinkingEl, thinkingText);
-          scrollChat();
+          thinkSoon(thinkingEl, thinkingText);
         }
         break;
       case 'token':
@@ -598,11 +705,15 @@ async function consumeRun(res) {
       const chunk = buffer.slice(0, idx);
       buffer = buffer.slice(idx + 2);
       for (const line of chunk.split('\n')) {
-        if (line.startsWith('data: ')) { try { handleEvent(JSON.parse(line.slice(6))); } catch { /* ignore */ } }
+        if (line.startsWith('data: ')) {
+          let ev = null;
+          try { ev = JSON.parse(line.slice(6)); } catch (e) { console.warn('bad event from the server', e); continue; }
+          try { handleEvent(ev); } catch (e) { console.error('could not show event', ev && ev.type, e); }
+        }
       }
     }
   }
-  if (touchedFiles) loadTree().catch(() => {});
+  if (touchedFiles) loadTree().catch((e) => console.warn('file tree refresh failed', e));
   return finished;
 }
 
@@ -633,7 +744,7 @@ async function startStream(makeFetch) {
     }
     if (!res.ok || !res.body) {
       let msg = `HTTP ${res.status}`;
-      try { msg = (await res.json()).error || msg; } catch { /* ignore */ }
+      try { msg = (await res.json()).error || msg; } catch { /* body is not JSON — keep the HTTP status text */ }
       throw new Error(msg);
     }
     finished = await consumeRun(res);
@@ -656,7 +767,7 @@ async function startStream(makeFetch) {
       try {
         if (state.runDone) await openSession(state.sessionId);
         else if (state.sessionId) state.messages = (await api(`/api/sessions/${state.sessionId}`)).messages;
-      } catch { /* ignore */ }
+      } catch (e) { console.warn('could not refresh the session after the run', e); }
     }
     state.runDone = false;
   }
@@ -1124,23 +1235,49 @@ $('prompt').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('chatForm').requestSubmit(); }
 });
 
-(async function init() {
-  await loadConfig();
-  const st = await api('/api/state');
-  state.workDir = st.workDir;
-  showWorkDir();
-  state.commands = st.commands || [];
-  fillAgents(st.agents, st.startup.agent || state.config.agent);
-  await loadModels();
-  await loadTree();
-  await loadSessions();
-  // resume where you left off: `-c` / `-s <id>`, else the last session used in this directory, else the newest
-  let last = null;
-  try { last = localStorage.getItem('lastSession:' + state.workDir); } catch { /* ignore */ }
-  const pick = st.startup.sessionId || (state.sessions.find((x) => x.id === last) || state.sessions[0] || {}).id;
-  if (pick) { try { await openSession(pick); return; } catch { /* fall through */ } }
-  newSession();
-})();
+/** Startup failures must be visible (and retryable), never a silently blank page. */
+function showFatal(title, err, retry) {
+  const box = $('messages');
+  box.replaceChildren();
+  const d = document.createElement('div');
+  d.className = 'hint';
+  d.innerHTML = `<b>${escapeHtml(title)}</b><br>${escapeHtml(err && err.message ? err.message : String(err))}<br><br>`;
+  const b = document.createElement('button');
+  b.className = 'btn small primary';
+  b.textContent = 'Try again';
+  b.addEventListener('click', retry);
+  d.appendChild(b);
+  box.appendChild(d);
+  setStatus('error', 'err');
+}
+
+async function init() {
+  try {
+    const [, st] = await Promise.all([loadConfig(), api('/api/state')]);
+    state.workDir = st.workDir;
+    showWorkDir();
+    state.commands = st.commands || [];
+    fillAgents(st.agents, st.startup.agent || state.config.agent);
+    // the slow/flaky parts run side by side: a sleeping model server must not hold up the file list or the sessions
+    const results = await Promise.allSettled([loadModels(), loadTree(), loadSessions()]);
+    results.forEach((r, i) => { if (r.status === 'rejected') console.warn(['models', 'files', 'sessions'][i] + ' failed to load', r.reason); });
+    if (results[1].status === 'rejected') $('tree').innerHTML = `<li class="hint" style="cursor:default">⚠ ${escapeHtml(results[1].reason.message)}</li>`;
+    // resume where you left off: `-c` / `-s <id>`, else the last session used in this directory, else the newest
+    let last = null;
+    try { last = localStorage.getItem('lastSession:' + state.workDir); } catch { /* storage blocked: skip */ }
+    const pick = st.startup.sessionId || (state.sessions.find((x) => x.id === last) || state.sessions[0] || {}).id;
+    if (pick) { try { await openSession(pick); return; } catch (e) { console.warn('could not reopen the last session', e); } }
+    newSession();
+  } catch (err) {
+    console.error('startup failed', err);
+    showFatal('Could not start the studio page', err, () => init());
+  }
+}
+init();
+
+// anything that slips through shows up in the status line (and the console) instead of failing silently
+window.addEventListener('unhandledrejection', (e) => { console.error('unhandled rejection', e.reason); setStatus('error: ' + String((e.reason && e.reason.message) || e.reason).slice(0, 80), 'err'); e.preventDefault(); });
+window.addEventListener('error', (e) => { console.error('page error', e.error || e.message); });
 
 // coming back to the tab (e.g. after viewing the file server in another tab): re-attach to the running agent
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !state.streaming && state.sessionId) resumeIfRunning(); });

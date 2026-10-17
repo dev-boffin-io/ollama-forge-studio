@@ -223,6 +223,25 @@ Before the first change to a file in a turn the previous content is journaled. *
 that turn's messages and puts your prompt back in the input; **Redo** re-applies it. (Changes made by `bash`
 are not tracked.)
 
+## Speed, stability and error handling
+
+- **File tree is lazy**: the sidebar loads one folder at a time (`/api/tree?path=`); dependency/cache folders (`node_modules`, `.venv`,
+  `site-packages`, …) are skipped by search and shown dimmed. glob/grep/list_files use a bounded, cached scan (6 s budget, 8 s cache).
+- **Snapshots never freeze a message and are never switched off**: the first full scan of a huge folder runs in the background
+  (started at boot / when you change folder) with no deadline; until it finishes, undo of file-tool edits uses the per-file journal and
+  undo of `bash` changes becomes available automatically once it is done (the `bash` tool takes the missing "before" snapshot lazily).
+  Later snapshots are incremental; if one exceeds `snapshotTimeoutSec` (default 25) only that message skips it and the next retries.
+  `"snapshots": false` is the only way to turn them off.
+- **Long chats stay fast**: the chat draws the last 60 messages (older ones behind a button), streaming markdown is throttled,
+  huge tool results are previewed in the browser but sent in full to the model; session files are written compactly, serialised and listed from a cache.
+- **Readable errors**: Cloudflare/gateway HTML pages become one line with a hint (e.g. `524` = the prompt is too big for the server to answer within
+  100 s). On 524/504 the agent shortens the prompt (prune + summarise) before retrying. DNS/refused/reset/timeouts are explained in plain words.
+- **First connection**: the model list is fetched with up to 3 quick retries, keeps the last good list if a tunnel hiccups, and retries in the
+  background until a server answers.
+- **Learns the real context window**: if a server accepts more tokens than the detected window, that larger value is used (no pointless compaction).
+- **Logs**: `~/.studio/logs/studio.log` (also `GET /api/logs`); `OLLAMA_STUDIO_LOG=debug` prints everything. `GET /api/health` shows status.
+  Unexpected exceptions are logged and never stop the server; a corrupt `config.json` is reported and backed up as `config.json.broken`.
+
 ## Large projects
 
 Limits are generous by default: context auto-detect up to 131072 tokens, `read_file` 5000 lines / up to ~1 MB per call, tool output kept up to

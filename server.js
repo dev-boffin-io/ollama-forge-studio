@@ -22,6 +22,13 @@ const journal = require('./lib/journal');
 const commands = require('./lib/commands');
 const attach = require('./lib/attach');
 const runtime = require('./lib/runtime');
+const log = require('./lib/log');
+const { statusFor, explain } = require('./lib/errors');
+
+// A bug in one request/tool must never take the whole studio (and a running agent) down: log it and keep serving.
+let crashCount = 0;
+process.on('uncaughtException', (err) => { crashCount++; log.error('process', 'uncaught exception', err); if (crashCount > 50) process.exit(1); });
+process.on('unhandledRejection', (err) => { log.error('process', 'unhandled promise rejection', err instanceof Error ? err : new Error(String(err))); });
 
 /* ---------- CLI:  ollama-forge-studio [dir] [--port N] [--host H] [-c | --continue] [-s ID] [--agent NAME] ---------- */
 
@@ -68,13 +75,13 @@ function readBody(req, limit = 100 * 1024 * 1024) {
     const chunks = [];
     req.on('data', (c) => {
       size += c.length;
-      if (size > limit) { reject(new Error('request body too large')); req.destroy(); return; }
+      if (size > limit) { reject(Object.assign(new Error('request body too large'), { status: 413 })); req.destroy(); return; }
       chunks.push(c);
     });
     req.on('end', () => {
       const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw) return resolve({});
-      try { resolve(JSON.parse(raw)); } catch { reject(new Error('invalid JSON body')); }
+      try { resolve(JSON.parse(raw)); } catch { reject(Object.assign(new Error('invalid JSON body'), { status: 400 })); }
     });
     req.on('error', reject);
   });
@@ -111,7 +118,7 @@ function pruneToolOutput() {
       const f = path.join(dir, n);
       if (Date.now() - fs.statSync(f).mtimeMs > 7 * 86400000) fs.rmSync(f, { force: true });
     }
-  } catch { /* none */ }
+  } catch (e) { if (e.code !== 'ENOENT') log.debug('server', 'tool-output cleanup failed', e); }
 }
 
 /** { ctx, used, tps } for a session (or a blank one when `session` is null) on `modelRef` (falls back to the configured model). */
@@ -119,7 +126,7 @@ async function contextInfo(modelRef, session) {
   const c = cfg.loadConfig();
   const ref = modelRef || (session && session.model) || c.model;
   let ctx = 0;
-  try { ctx = (await resolveConfig(c, ref)).numCtx || 0; } catch { /* provider unreachable */ }
+  try { ctx = (await resolveConfig(c, ref)).numCtx || 0; } catch (e) { log.debug('server', 'context window unknown (provider unreachable?)', e); }
   return { ctx, used: session ? contextSize(session) : 0, tps: (session && session.lastTps) || 0 };
 }
 
@@ -151,6 +158,7 @@ async function handleApi(req, res, url) {
     const dir = cfg.setWorkDir(body.dir);
     mcp.stop(); lsp.stop(); procs.killAll();
     pruneToolOutput();
+    if (cfg.loadConfig().snapshots !== false) snapshot.warmUp().catch(log.swallow('snapshot', 'warm-up failed'));
     return sendJson(res, 200, { workDir: dir, latest: await sessions.latest() });
   }
 
@@ -192,7 +200,19 @@ async function handleApi(req, res, url) {
   }
 
   /* --- files in the working directory --- */
-  if (pathname === '/api/tree' && method === 'GET') return sendJson(res, 200, { workDir: cfg.getWorkDir(), tree: await ws.listTree() });
+  // one directory level at a time (the UI expands folders lazily, so a huge folder never freezes anything)
+  if (pathname === '/api/tree' && method === 'GET') {
+    const dir = ws.safeResolve(url.searchParams.get('path') || '') && (url.searchParams.get('path') || '');
+    const level = await ws.listDir(dir);
+    return sendJson(res, 200, { workDir: cfg.getWorkDir(), ...level, tree: level.entries });
+  }
+  if (pathname === '/api/logs' && method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(log.tail(Number(url.searchParams.get('lines')) || 200) + '\n');
+  }
+  if (pathname === '/api/health' && method === 'GET') {
+    return sendJson(res, 200, { ok: true, node: process.version, workDir: cfg.getWorkDir(), studioDir: cfg.studioDir(), running: running.size, snapshots: snapshot.status() || 'on', uptime: Math.round(process.uptime()) });
+  }
   if (pathname === '/api/file') {
     const rel = url.searchParams.get('path') || '';
     if (method === 'GET') return sendJson(res, 200, { path: rel, content: await ws.readFile(rel) });
@@ -346,7 +366,9 @@ async function handleApi(req, res, url) {
    A run lives on the server, independent of the browser connection: if the tab is closed or the phone suspends the
    browser, the agent keeps working. Clients (re)attach with GET /api/sessions/:id/attach and get the whole run replayed. */
 
-const sse = (res, ev) => { if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(ev)}\n\n`); };
+const sse = (res, ev) => {
+  try { if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(ev)}\n\n`); } catch (e) { log.debug('server', 'client stream write failed', e); }
+};
 
 function publish(run, ev) {
   const last = run.events[run.events.length - 1];
@@ -415,7 +437,7 @@ async function handleChat(req, res) {
     run.ac.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
     emit({ type: 'question', id, question, options });
   });
-  const heartbeat = setInterval(() => { for (const r of run.subs) if (!r.writableEnded) r.write(': keepalive\n\n'); }, 15000);
+  const heartbeat = setInterval(() => { for (const r of run.subs) { try { if (!r.writableEnded) r.write(': keepalive\n\n'); } catch (e) { log.debug('server', 'keepalive failed', e); } } }, 15000);
 
   // The run continues even if every client disconnects.
   (async () => {
@@ -440,14 +462,17 @@ async function handleChat(req, res) {
       session.revert = null; // a new message discards any pending redo
       session.messages.push({ role: 'user', content, turn: session.turn, ...(display !== undefined ? { display } : {}), ...(attachments ? { attachments } : {}) });
       await sessions.save(session);
-      run.base = JSON.parse(JSON.stringify(session.messages));
+      run.base = session.messages.slice();     // shallow copy is enough (and instant): messages are replaced, not mutated, for the replay
       emit({ type: 'start', sessionId: session.id, title: session.title, agent: agent.name, model, workDir: cfg.getWorkDir() });
       session.snaps = session.snaps || {};
-      const startSnap = await snapshot.track();
+      const snapOn = config.snapshots !== false;
+      const snapOpts = { timeoutSec: Number(config.snapshotTimeoutSec) || 25 };
+      const startSnap = snapOn ? await snapshot.track(snapOpts) : null;
       if (startSnap) session.snaps[session.turn] = startSnap;
+      else if (snapOn && snapshot.status() && !session.snapNoteShown) { session.snapNoteShown = true; emit({ type: 'info', text: `ℹ ${snapshot.status()}` }); }
       const result = await runAgent({ session, root: session, agent, model, config, emit, signal: run.ac.signal, askPermission, askUser });
       if (startSnap) {
-        const files = await snapshot.diff(startSnap, await snapshot.track());
+        const files = await snapshot.diff(startSnap, await snapshot.track(snapOpts));
         if (files.length) emit({ type: 'changes', files });
       }
       if (session.autoTitle) {
@@ -463,7 +488,7 @@ async function handleChat(req, res) {
       clearInterval(heartbeat);
       for (const id of myPermissions) pendingPermissions.delete(id);
       for (const id of myQuestions) pendingQuestions.delete(id);
-      try { await sessions.save(session); } catch { /* ignore */ }
+      try { await sessions.save(session); } catch (e) { log.error('server', `could not save session ${session.id} at the end of the run`, e); emit({ type: 'warning', message: `Could not save the session: ${e.message}` }); }
       running.delete(session.id);
       for (const r of run.subs) if (!r.writableEnded) r.end();
     }
@@ -479,27 +504,35 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
     return serveStatic(req, res, url.pathname);
   } catch (err) {
-    if (!res.headersSent) sendJson(res, 400, { error: String(err && err.message ? err.message : err) });
-    else if (!res.writableEnded) res.end();
+    const status = statusFor(err);
+    if (status >= 500) log.error('http', `${req.method} ${url.pathname} failed`, err); else log.debug('http', `${req.method} ${url.pathname} -> ${status}`, err);
+    try {
+      if (!res.headersSent) sendJson(res, status, { error: explain(err) });
+      else if (!res.writableEnded) res.end();
+    } catch (e) { log.debug('http', 'could not send the error response', e); }
   }
 });
+server.on('clientError', (err, socket) => { try { if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'); else socket.destroy(); } catch { /* socket already gone */ } });
 
 /* ---------- boot: pick directory, resolve session to resume, listen (auto-bump port) ---------- */
 
 const startup = { sessionId: null, agent: args.agent || null };
 
 (async () => {
-  const workDir = cfg.setWorkDir(args.dir || process.cwd());
+  let workDir;
+  try { workDir = cfg.setWorkDir(args.dir || process.cwd()); } catch (e) { console.error(`cannot open the directory: ${e.message}`); log.error('boot', 'setWorkDir failed', e); process.exit(1); }
   pruneToolOutput();
   if (args.session) startup.sessionId = args.session;
-  else if (args.cont) startup.sessionId = (await sessions.latest())?.id || null;
+  else if (args.cont) { try { startup.sessionId = (await sessions.latest())?.id || null; } catch (e) { log.warn('boot', 'could not find the latest session to continue', e); } }
 
   let port = args.port;
   const tryListen = (attempt) => {
     server.once('error', (e) => {
-      if (e.code === 'EADDRINUSE' && attempt < 20) { port++; tryListen(attempt + 1); } else throw e;
+      if (e.code === 'EADDRINUSE' && attempt < 20) { port++; tryListen(attempt + 1); }
+      else { console.error(`cannot start the server on ${args.host}:${port}: ${e.code === 'EADDRINUSE' ? 'no free port found' : e.message}`); log.error('server', 'listen failed', e); process.exit(1); }
     });
     server.listen(port, args.host, () => {
+      if (cfg.loadConfig().snapshots !== false) snapshot.warmUp().catch(log.swallow('boot', 'snapshot warm-up failed'));   // background: never delays a message
       console.log(`ollama-forge-studio  dir: ${workDir}`);
       console.log(`               url: http://${args.host}:${server.address().port}${startup.sessionId ? `   (resuming ${startup.sessionId})` : ''}`);
     });

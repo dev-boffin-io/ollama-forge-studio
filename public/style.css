@@ -285,3 +285,8 @@ select { min-width: 200px; }
 @media (pointer: coarse) {
   .messages .msg.user, .messages .msg.assistant { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 }
+
+/* lazy file tree / long chats */
+.tree li.dir.heavy { color: var(--muted); font-weight: 400; font-style: italic; }
+.tree li.hint { color: var(--muted); font-style: italic; }
+.more-msgs { display: block; margin: 6px auto 12px; }
