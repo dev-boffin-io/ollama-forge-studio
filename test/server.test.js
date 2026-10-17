@@ -55,3 +55,19 @@ test('server boots, serves the UI and answers the HTTP API', async (t) => {
   const missing = await fetch(base + '/api/nope');
   assert.ok([400, 404].includes(missing.status), `unexpected status ${missing.status}`);
 });
+
+test('GET session returns summarised-away messages as `history` so the chat can keep showing them', async (t) => {
+  const sessions = require('../lib/sessions');
+  const s = await sessions.create({ agent: 'build', model: 'x', title: 't' });
+  await sessions.archiveAppend(s.id, [{ role: 'user', content: 'old question' }, { role: 'tool', tool_call_id: 'c', content: 'x'.repeat(30000) }], 0);
+  s.archived = 2;
+  s.messages = [{ role: 'user', summary: true, content: 'Summary of the earlier conversation:\nS' }, { role: 'assistant', summary: true, content: 'ok' }];
+  await sessions.save(s);
+  const { child, port } = await startServer();
+  t.after(() => child.kill('SIGKILL'));
+  const got = await (await fetch(`http://127.0.0.1:${port}/api/sessions/${s.id}`)).json();
+  assert.equal(got.history.length, 2);
+  assert.equal(got.history[0].content, 'old question');
+  assert.ok(got.history[1].content.length < 21000);
+  assert.equal(got.messages.length, 2);
+});

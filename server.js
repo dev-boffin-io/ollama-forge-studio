@@ -234,7 +234,9 @@ async function handleApi(req, res, url) {
     if (seg.length === 3) {
       if (method === 'GET') {
         const s = await sessions.get(id);
-        return sendJson(res, 200, { ...s, running: running.has(id), context: await contextInfo(s.model, s) });
+        // `history` = messages that were summarised out of the model's context: the chat still shows them unchanged (huge tool output is clipped for transport)
+        const history = (await sessions.archiveRead(id, s.archived || 0)).map((m) => (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 20000 ? { ...m, content: m.content.slice(0, 20000) + '\n… (clipped in the chat view; /export has everything)' } : m));
+        return sendJson(res, 200, { ...s, history, running: running.has(id), context: await contextInfo(s.model, s) });
       }
       if (method === 'DELETE') { running.get(id)?.ac.abort(); return sendJson(res, 200, await sessions.remove(id)); }
       if (method === 'PUT' || method === 'PATCH') {

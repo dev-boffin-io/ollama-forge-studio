@@ -228,9 +228,13 @@ const RENDER_WINDOW = 60;    // messages drawn at once; older ones are one click
 
 function renderSession(s, from = null) {
   const box = $('messages');
-  const messages = s.messages || [];
-  state.messages = messages;                          // message menu (Edit / Resend) maps DOM bubbles back to these by index
-  state.renderFrom = from == null ? Math.max(0, messages.length - RENDER_WINDOW) : Math.max(0, from);
+  const live = s.messages || [];
+  const history = s.history || [];                    // messages summarised out of the model's context — still shown exactly as they were
+  const off = history.length;
+  const all = history.length ? [...history, ...live] : live;
+  state.messages = live;                              // message menu (Edit / Resend) maps DOM bubbles back to these by index
+  state.history = history;
+  state.renderFrom = from == null ? Math.max(0, all.length - RENDER_WINDOW) : Math.max(0, from);
   const start = state.renderFrom;
   box.replaceChildren();
   const cards = new Map();
@@ -240,24 +244,24 @@ function renderSession(s, from = null) {
       const more = document.createElement('button');
       more.className = 'btn small ghost more-msgs';
       more.textContent = `↑ Show ${Math.min(RENDER_WINDOW, start)} earlier messages (${start} hidden)`;
-      more.addEventListener('click', () => { const keep = box.scrollHeight - box.scrollTop; renderSession({ messages }, start - RENDER_WINDOW); box.scrollTop = box.scrollHeight - keep; });
+      more.addEventListener('click', () => { const keep = box.scrollHeight - box.scrollTop; renderSession({ messages: live, history }, start - RENDER_WINDOW); box.scrollTop = box.scrollHeight - keep; });
       box.appendChild(more);
     }
-    for (let i = start; i < messages.length; i++) {
-      try { renderOneMessage(messages[i], i, cards); } catch (e) { console.error('could not draw message', i, e); }
+    for (let i = start; i < all.length; i++) {
+      try { renderOneMessage(all[i], i >= off ? i - off : undefined, cards); } catch (e) { console.error('could not draw message', i, e); }
     }
-    if (!messages.length) addHint();
+    if (!all.length) addHint();
   } finally { bulkRender = false; }
   scrollChat();
 }
 
 function renderOneMessage(m, i, cards) {
   if (m.role === 'user') {
-    if (!m.summary) { const el = addMessage('user', userText(m)); el.dataset.idx = i; decorateUser(el, m.attachments); }
+    if (!m.summary) { const el = addMessage('user', userText(m)); if (i !== undefined) el.dataset.idx = i; decorateUser(el, m.attachments); }
     else addSummaryBlock(m.content.replace(/^Summary of the earlier conversation:\n/, ''));
   } else if (m.role === 'assistant') {
     if (m.thinking && !m.summary) { const t = addThinkingBlock(); t.style.display = ''; t.open = false; setThinking(t, m.thinking); }
-    if (m.content && !m.summary) addMessage('assistant', m.content).dataset.idx = i;
+    if (m.content && !m.summary) { const el = addMessage('assistant', m.content); if (i !== undefined) el.dataset.idx = i; }
     for (const c of m.tool_calls || []) {
       const { card, body } = addToolCard(c.function.name, c.function.arguments);
       body.innerHTML = `<pre>${escapeHtml(truncate(JSON.stringify(c.function.arguments, null, 2), 6000))}</pre>`;
@@ -448,12 +452,16 @@ function resultHtml(result, ok) {
 }
 
 
-/** Collapsed "📝 Summary" card shown where older messages were folded away (click to read it). */
-function addSummaryBlock(text) {
+/** A thin "Compaction" line where older messages were folded into a summary; click it to read the summary (like a Thinking block). */
+function addSummaryBlock(text, covered) {
   const el = document.createElement('details');
-  el.className = 'msg summary';
-  el.innerHTML = '<summary>📝 Earlier conversation was summarised — click to read the summary</summary><div class="md"></div>';
-  el.querySelector('.md').innerHTML = window.renderMarkdown(text);
+  el.className = 'msg compaction';
+  const label = document.createElement('summary');
+  label.textContent = covered ? `Compaction · ${covered} messages summarised` : 'Compaction';
+  const body = document.createElement('div');
+  body.className = 'md';
+  body.innerHTML = window.renderMarkdown(text);
+  el.append(label, body);
   $('messages').appendChild(el);
   return el;
 }
@@ -678,7 +686,11 @@ async function consumeRun(res) {
         break;
       case 'info': addMessage('note', event.text).className = 'note'; break;
       case 'recall': addMessage('note', `🔎 recalled ${event.count} earlier snippet(s) from the project history`).className = 'note'; break;
-      case 'compacting': addMessage('note', 'context is full — summarising older messages…').className = 'note'; break;
+      case 'compacting': state.compactNote = addMessage('note', 'context is full — summarising older messages…'); state.compactNote.className = 'note'; break;
+      case 'compacted':
+        if (state.compactNote) { state.compactNote.remove(); state.compactNote = null; }
+        if (event.text) { newTurnBlock(); addSummaryBlock(event.text, event.covered); scrollChat(); }
+        break;
       case 'metrics':
         if (!event.child && event.metrics && event.metrics.eval_count) {
           showMetrics(event);
