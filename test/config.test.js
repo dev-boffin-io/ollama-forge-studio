@@ -60,9 +60,9 @@ test('loadConfig: defaults, global and local layers', () => {
   assert.equal(merged.permission.edit, 'allow');        // untouched keys keep their defaults
   assert.ok(merged.providers.lp);
 
-  // without a local file the global config.json applies
+  // without a local file the global config.json applies (and is absent in a fresh checkout — it is gitignored)
   fs.rmSync(path.join(ctx.studioDir, 'config.json'));
-  const global = JSON.parse(fs.readFileSync(cfg.CONFIG_PATH, 'utf8'));
+  const global = fs.existsSync(cfg.CONFIG_PATH) ? JSON.parse(fs.readFileSync(cfg.CONFIG_PATH, 'utf8')) : {};
   const after = cfg.loadConfig();
   assert.equal(after.model, global.model !== undefined ? global.model : cfg.DEFAULT_CONFIG.model);
   assert.deepEqual(after.providers, {});
