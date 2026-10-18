@@ -2,6 +2,7 @@
   "name": "ollama-forge-studio",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "description": "Agentic coding studio for any Ollama endpoint: agents, saved/resumable sessions, works in whatever directory you launch it. Zero runtime dependencies.",
   "type": "commonjs",
   "main": "server.js",
