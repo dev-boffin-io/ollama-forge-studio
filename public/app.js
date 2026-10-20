@@ -13,8 +13,20 @@ const state = {
 
 function setStatus(text, cls = '') {
   const el = $('connStatus');
-  el.textContent = text;
   el.className = 'status' + (cls ? ' ' + cls : '');
+  el.textContent = '';
+  const label = document.createElement('span');
+  label.className = 'status-text';
+  label.textContent = text;
+  el.appendChild(label);
+  // a small inline wave while the agent is working (generating / retrying / connecting)
+  if (cls === 'busy' && !/^ready\b/.test(text)) {
+    const wave = document.createElement('span');
+    wave.className = 'wave';
+    wave.setAttribute('aria-hidden', 'true');
+    for (let i = 0; i < 3; i++) wave.appendChild(document.createElement('i'));
+    el.appendChild(wave);
+  }
 }
 
 /** Persistent "ctx 34% · 12.3 tok/s" badge (stays visible after the status text changes to "done"). */
@@ -167,7 +179,7 @@ async function loadSessions() {
     li.innerHTML =
       `<div class="top"><span class="title">${escapeHtml(s.title)}</span><span class="del" title="Delete">✕</span></div>` +
       `<div class="meta"><span class="agent-badge ${escapeHtml(s.agent)}">${escapeHtml(s.agent)}</span><span>${s.running ? '<b style="color:var(--amber)">● running</b>' : ago(s.updatedAt) + ' ago'}</span><span>${s.messageCount} msgs</span></div>`;
-    li.addEventListener('click', () => openSession(s.id));
+    li.addEventListener('click', () => { closePanels(); openSession(s.id); });
     li.querySelector('.del').addEventListener('click', async (e) => {
       e.stopPropagation();
       if (!confirm(`Delete session "${s.title}"?`)) return;
@@ -336,6 +348,7 @@ async function changeDir() {
     treeState.expanded.clear(); treeState.cache.clear();
     $('editor').value = '';
     $('editorTitle').textContent = 'No file open';
+    if ($('editorDlg').open) $('editorDlg').close();
     showWorkDir();
     await loadTree();
     if (r.latest) await openSession(r.latest.id); else newSession();
@@ -418,7 +431,39 @@ async function openFile(relPath) {
   $('saveFile').disabled = false;
   setDirty(false);
   markActiveFile();
+  closePanels();                                      // on a phone the drawer must not stay over the editor
+  openEditor();
 }
+
+/** Show the editor as a modal overlay (it is no longer a cramped column). */
+function openEditor() {
+  const dlg = $('editorDlg');
+  if (!dlg || dlg.open) return;
+  if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+}
+
+/** Close the editor, asking before throwing away unsaved edits. */
+function closeEditor() {
+  const dlg = $('editorDlg');
+  if (!dlg || !dlg.open) return;
+  if ($('dirtyDot').classList.contains('on') && !confirm('Discard unsaved changes?')) return;
+  dlg.close();
+}
+
+/* ---------- slide-out panels (mobile) ---------- */
+/* NOTE: these names must not collide with the message context-menu helpers at the bottom of this file. */
+
+function openPanels() {
+  document.body.classList.add('menu-open');
+  $('menuBtn').setAttribute('aria-expanded', 'true');
+}
+
+function closePanels() {
+  document.body.classList.remove('menu-open');
+  $('menuBtn').setAttribute('aria-expanded', 'false');
+}
+
+const panelsOpen = () => document.body.classList.contains('menu-open');
 
 async function saveFile() {
   if (!state.activeFile) return;
@@ -1191,6 +1236,9 @@ $('mcpReload').addEventListener('click', async () => { $('statusBody').innerHTML
 $('saveConfig').addEventListener('click', saveConfig);
 $('refreshModels').addEventListener('click', loadModels);
 $('workDir').addEventListener('click', changeDir);
+$('workDir').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); changeDir(); }
+});
 $('newSession').addEventListener('click', () => { if (!state.streaming) newSession(); });
 $('forkSession').addEventListener('click', forkSession);
 $('compactSession').addEventListener('click', compactSession);
@@ -1227,6 +1275,18 @@ $('refreshTree').addEventListener('click', loadTree);
 $('newFile').addEventListener('click', createFile);
 $('saveFile').addEventListener('click', saveFile);
 $('editor').addEventListener('input', () => setDirty(true));
+$('editorClose').addEventListener('click', closeEditor);
+$('editorDlg').addEventListener('cancel', (e) => {
+  // Escape: keep the dialog open unless the user agrees to lose unsaved edits
+  if ($('dirtyDot').classList.contains('on')) { e.preventDefault(); if (confirm('Discard unsaved changes?')) $('editorDlg').close(); }
+});
+
+// slide-out panels (only meaningful on narrow screens; harmless on desktop)
+$('menuBtn').addEventListener('click', () => (panelsOpen() ? closePanels() : openPanels()));
+$('menuClose').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closePanels(); });
+$('menuScrim').addEventListener('click', closePanels);
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanels(); });
+window.addEventListener('resize', () => { if (window.innerWidth > 900) closePanels(); });
 
 $('chatForm').addEventListener('submit', (e) => {
   e.preventDefault();

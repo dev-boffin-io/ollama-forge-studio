@@ -2,66 +2,61 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Ollama Forge Studio</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header class="topbar">
+    <button id="menuBtn" class="btn ghost menu-btn" type="button" aria-label="Open panels" aria-controls="sidePanels" aria-expanded="false" title="Open panels">☰</button>
     <div class="brand">
       <span class="logo">◈</span>
       <div>
         <h1>Ollama Forge Studio</h1>
-        <p class="sub"><span id="workDir" class="workdir" title="Click to change directory">…</span></p>
+        <p class="sub"><span id="workDir" class="workdir" role="button" tabindex="0" aria-label="Change workspace directory" title="Click to change directory">…</span></p>
       </div>
     </div>
     <div class="conn">
-      <label>Endpoint
+      <label><span class="lbl">Endpoint</span>
         <input id="endpoint" type="url" spellcheck="false" placeholder="http://localhost:11434 or https://xxx.trycloudflare.com" />
       </label>
       <button id="providersBtn" class="btn ghost" title="Manage providers (Ollama / OpenAI / Anthropic / Gemini / Groq, API keys)">Providers</button>
-      <label>Model
+      <label><span class="lbl">Model</span>
         <select id="model"></select>
       </label>
       <button id="refreshModels" class="btn ghost" title="Reload models from all providers">↻</button>
       <button id="statusBtn" class="btn ghost" title="MCP servers, LSP, skills">Tools</button>
       <button id="saveConfig" class="btn primary">Save</button>
-      <span id="connStatus" class="status">idle</span>
-      <span id="metricsBadge" class="status metrics" title="Context used / generation speed (last step)" hidden></span>
       <button id="quitBtn" class="btn ghost danger" title="Stop the studio server">Quit</button>
     </div>
   </header>
 
   <main class="layout">
-    <aside class="pane sessions">
-      <div class="pane-head">
-        <h2>Sessions</h2>
-        <button id="newSession" class="btn small">+ New</button>
+    <div class="side" id="sidePanels">
+      <div class="side-head">
+        <span class="side-title">Panels</span>
+        <button id="menuClose" class="btn small ghost" type="button" aria-label="Close panels" title="Close panels">✕ Close</button>
       </div>
-      <ul id="sessionList" class="list"></ul>
-    </aside>
 
-    <section class="pane files">
-      <div class="pane-head">
-        <h2 id="filesTitle">Files</h2>
-        <div class="row">
-          <button id="refreshTree" class="btn small ghost">↻</button>
-          <button id="newFile" class="btn small">+ File</button>
+      <aside class="pane sessions">
+        <div class="pane-head">
+          <h2>Sessions</h2>
+          <button id="newSession" class="btn small">+ New</button>
         </div>
-      </div>
-      <ul id="tree" class="tree"></ul>
-    </section>
+        <ul id="sessionList" class="list"></ul>
+      </aside>
 
-    <section class="pane editor">
-      <div class="pane-head">
-        <h2 id="editorTitle">No file open</h2>
-        <div class="row">
-          <span id="dirtyDot" class="dirty" title="Unsaved changes"></span>
-          <button id="saveFile" class="btn small primary" disabled>Save</button>
+      <section class="pane files">
+        <div class="pane-head">
+          <h2 id="filesTitle">Files</h2>
+          <div class="row">
+            <button id="refreshTree" class="btn small ghost" title="Reload the file list">↻</button>
+            <button id="newFile" class="btn small">+ File</button>
+          </div>
         </div>
-      </div>
-      <textarea id="editor" spellcheck="false" placeholder="Select a file to view and edit its contents."></textarea>
-    </section>
+        <ul id="tree" class="tree"></ul>
+      </section>
+    </div>
 
     <section class="pane chat">
       <div class="pane-head">
@@ -81,6 +76,10 @@
       <div id="messages" class="messages"></div>
       <div id="cmdHint" class="cmdhint" hidden></div>
       <div id="attachBar" class="attachbar" hidden></div>
+      <div class="chat-status" aria-live="polite">
+        <span id="connStatus" class="status">idle</span>
+        <span id="metricsBadge" class="status metrics" title="Context used / generation speed (last step)" hidden></span>
+      </div>
       <form id="chatForm" class="composer">
         <button id="attachBtn" class="btn ghost attach-btn" type="button" title="Attach files (any type) — or drop / paste them here">📎</button>
         <input id="fileInput" type="file" multiple hidden />
@@ -89,6 +88,8 @@
       </form>
     </section>
   </main>
+
+  <div id="menuScrim" class="scrim" aria-hidden="true"></div>
 
   <dialog id="providersDlg" class="dlg">
     <h3>Providers</h3>
@@ -133,6 +134,21 @@
       <span class="spacer"></span>
       <button id="summariesClose" class="btn small ghost">Close</button>
     </div>
+  </dialog>
+
+  <dialog id="editorDlg" class="dlg editor-dlg">
+    <div class="editor-head">
+      <div class="editor-title">
+        <span class="editor-label">Editing file</span>
+        <h3 id="editorTitle">No file open</h3>
+      </div>
+      <div class="row">
+        <span id="dirtyDot" class="dirty" title="Unsaved changes"></span>
+        <button id="saveFile" class="btn small primary" disabled>Save</button>
+        <button id="editorClose" class="btn small ghost" type="button" aria-label="Close editor" title="Close editor">✕ Close</button>
+      </div>
+    </div>
+    <textarea id="editor" spellcheck="false" placeholder="Select a file to view and edit its contents."></textarea>
   </dialog>
 
   <script src="/markdown.js"></script>
