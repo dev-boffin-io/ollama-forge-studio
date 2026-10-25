@@ -21,6 +21,7 @@
         <input id="endpoint" type="url" spellcheck="false" placeholder="http://localhost:11434 or https://xxx.trycloudflare.com" />
       </label>
       <button id="providersBtn" class="btn ghost" title="Manage providers (Ollama / OpenAI / Anthropic / Gemini / Groq, API keys)">Providers</button>
+      <button id="settingsBtn" class="btn ghost" title="Agent &amp; runtime settings">Settings</button>
       <label><span class="lbl">Model</span>
         <select id="model"></select>
       </label>
@@ -110,6 +111,25 @@
       <button id="mcpReload" class="btn small">Reload MCP</button>
       <span class="spacer"></span>
       <button id="statusClose" class="btn small ghost">Close</button>
+    </div>
+  </dialog>
+
+  <dialog id="settingsDlg" class="dlg settings-dlg">
+    <h3>Settings</h3>
+    <p class="hint-line">Agent and runtime options. Changes are saved to the config.</p>
+    <div class="settings-grid">
+      <label><span>Thinking</span><select id="sThinking"><option value="true">true</option><option value="false">false</option></select></label>
+      <label><span>Temperature</span><input id="sTemperature" type="number" step="0.1" min="0" max="2" /></label>
+      <label><span>numCtx</span><input id="sNumCtx" type="number" min="0" step="256" /></label>
+      <label><span>maxIterations</span><input id="sMaxIterations" type="number" min="1" step="1" /></label>
+      <label><span>requestTimeoutMs</span><input id="sRequestTimeoutMs" type="number" min="1000" step="1000" /></label>
+    </div>
+    <label class="settings-block"><span>systemPrompt</span><textarea id="sSystemPrompt" rows="6" spellcheck="false"></textarea></label>
+    <div class="row dlg-actions">
+      <span class="hint-line">0 numCtx = auto</span>
+      <span class="spacer"></span>
+      <button id="settingsCancel" class="btn small ghost">Cancel</button>
+      <button id="settingsSave" class="btn small primary">Save</button>
     </div>
   </dialog>
 

@@ -123,10 +123,14 @@ select { min-width: 200px; }
 .list li:hover .del { visibility: visible; }
 .list li .del:hover { color: var(--red); }
 
-.tree li { padding: 3px 6px; border-radius: 5px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 12px; }
+.tree li { border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 12px; }
 .tree li:hover { background: var(--bg-3); }
 .tree li.active { background: #1f3a5f; }
 .tree li.dir { color: var(--accent); font-weight: 600; }
+.tree-row { display: flex; align-items: center; gap: 6px; padding: 3px 6px; }
+.tree-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.tree-dl { color: var(--muted); text-decoration: none; font-size: 11px; opacity: .7; }
+.tree-dl:hover { color: var(--text); opacity: 1; }
 
 /* Editor (modal overlay) */
 .dlg.editor-dlg { width: min(1100px, 96vw); height: min(88vh, 900px); max-height: calc(100vh - 24px); padding: 0; overflow: hidden; }
@@ -213,6 +217,12 @@ select { min-width: 200px; }
 .prow .full { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; }
 .prow .res { font-size: 11.5px; color: var(--muted); }
 .dlg-actions { margin-top: 10px; gap: 6px; }
+.settings-dlg { width: min(720px, 94vw); }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 10px; }
+.settings-grid label, .settings-block { display: flex; flex-direction: column; gap: 4px; }
+.settings-grid input, .settings-grid select, .settings-block textarea { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: 13px/1.4 var(--ui); }
+.settings-block textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
+.settings-grid span, .settings-block span { color: var(--muted); font-size: 12px; }
 .spacer { flex: 1; }
 .srow { display: flex; gap: 8px; padding: 3px 0; font-size: 12.5px; align-items: baseline; }
 .srow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }

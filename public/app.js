@@ -97,6 +97,34 @@ async function loadConfig() {
   state.model = state.config.model || '';
 }
 
+function openSettings() {
+  const dlg = $('settingsDlg');
+  if (!dlg) return;
+  const c = state.config || {};
+  $('sThinking').value = String(c.thinking === true);
+  $('sTemperature').value = c.temperature == null ? '' : c.temperature;
+  $('sNumCtx').value = c.numCtx == null ? '' : c.numCtx;
+  $('sMaxIterations').value = c.maxIterations == null ? '' : c.maxIterations;
+  $('sRequestTimeoutMs').value = c.requestTimeoutMs == null ? '' : c.requestTimeoutMs;
+  $('sSystemPrompt').value = c.systemPrompt || '';
+  if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+}
+
+async function saveSettings() {
+  const patch = {
+    thinking: $('sThinking').value === 'true',
+    temperature: $('sTemperature').value === '' ? undefined : Number($('sTemperature').value),
+    numCtx: $('sNumCtx').value === '' ? 0 : Number($('sNumCtx').value),
+    maxIterations: $('sMaxIterations').value === '' ? undefined : Number($('sMaxIterations').value),
+    requestTimeoutMs: $('sRequestTimeoutMs').value === '' ? undefined : Number($('sRequestTimeoutMs').value),
+    systemPrompt: $('sSystemPrompt').value,
+  };
+  state.config = await api('/api/config', { method: 'PUT', body: JSON.stringify(patch) });
+  state.model = state.config.model;
+  $('settingsDlg').close();
+  setStatus('saved', 'ok');
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let modelRetryTimer = null;
 
@@ -390,17 +418,43 @@ function renderTree() {
       if (node.type === 'dir') {
         const open = treeState.expanded.has(node.path);
         li.className = 'dir' + (node.heavy ? ' heavy' : '');
-        li.textContent = (open ? '▾ ' : '▸ ') + node.name;
         li.title = node.heavy ? 'dependency/cache folder — expand only if you need it' : node.path;
-        li.addEventListener('click', () => toggleDir(node.path));
+        const row = document.createElement('div');
+        row.className = 'tree-row';
+        const label = document.createElement('span');
+        label.className = 'tree-label';
+        label.textContent = (open ? '▾ ' : '▸ ') + node.name;
+        label.addEventListener('click', () => toggleDir(node.path));
+        const dl = document.createElement('a');
+        dl.className = 'tree-dl';
+        dl.href = '/api/download?path=' + encodeURIComponent(node.path);
+        dl.download = (node.name || 'folder') + '.zip';
+        dl.title = 'Download folder as zip';
+        dl.textContent = '⬇ zip';
+        dl.addEventListener('click', (e) => e.stopPropagation());
+        row.append(label, dl);
+        li.appendChild(row);
         frag.appendChild(li);
         if (open) walk(node.path, depth + 1);
       } else {
         li.className = node.path === state.activeFile ? 'active' : '';
         li.dataset.path = node.path;
-        li.textContent = node.name;
         li.title = node.path;
-        li.addEventListener('click', () => openFile(node.path).catch((e) => setStatus(e.message, 'err')));
+        const row = document.createElement('div');
+        row.className = 'tree-row';
+        const label = document.createElement('span');
+        label.className = 'tree-label';
+        label.textContent = node.name;
+        label.addEventListener('click', () => openFile(node.path).catch((e) => setStatus(e.message, 'err')));
+        const dl = document.createElement('a');
+        dl.className = 'tree-dl';
+        dl.href = '/api/download?path=' + encodeURIComponent(node.path);
+        dl.download = node.name;
+        dl.title = 'Download file';
+        dl.textContent = '⬇';
+        dl.addEventListener('click', (e) => e.stopPropagation());
+        row.append(label, dl);
+        li.appendChild(row);
         frag.appendChild(li);
       }
     }
@@ -1234,6 +1288,9 @@ $('mcpReload').addEventListener('click', async () => { $('statusBody').innerHTML
 
 
 $('saveConfig').addEventListener('click', saveConfig);
+$('settingsBtn').addEventListener('click', openSettings);
+if ($('settingsCancel')) $('settingsCancel').addEventListener('click', () => $('settingsDlg').close());
+if ($('settingsSave')) $('settingsSave').addEventListener('click', () => saveSettings().catch((e) => setStatus(e.message, 'err')));
 $('refreshModels').addEventListener('click', loadModels);
 $('workDir').addEventListener('click', changeDir);
 $('workDir').addEventListener('keydown', (e) => {

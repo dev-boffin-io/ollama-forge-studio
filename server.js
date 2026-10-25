@@ -3,9 +3,11 @@
 
 const http = require('node:http');
 const fs = require('node:fs');
+const fsp = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { URL } = require('node:url');
+const { spawn } = require('node:child_process');
 
 const cfg = require('./lib/config');
 const llm = require('./lib/llm');
@@ -205,6 +207,27 @@ async function handleApi(req, res, url) {
     const dir = ws.safeResolve(url.searchParams.get('path') || '') && (url.searchParams.get('path') || '');
     const level = await ws.listDir(dir);
     return sendJson(res, 200, { workDir: cfg.getWorkDir(), ...level, tree: level.entries });
+  }
+  if (pathname === '/api/download' && method === 'GET') {
+    const rel = url.searchParams.get('path') || '';
+    const full = ws.safeResolve(rel);
+    const st = await fsp.stat(full).catch(() => null);
+    if (!st) throw new Error('not found');
+    if (st.isDirectory()) {
+      const base = path.basename(full) || 'folder';
+      const safeName = base.replace(/[^\w.-]+/g, '_') || 'folder';
+      res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${safeName}.zip"` });
+      const args = ['-r', '-q', '-', '.'];
+      const proc = spawn('zip', args, { cwd: full, stdio: ['ignore', 'pipe', 'pipe'] });
+      proc.stdout.pipe(res);
+      proc.stderr.on('data', () => {});
+      proc.on('error', (e) => { if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain' }); if (!res.writableEnded) res.end('zip failed: ' + e.message); });
+      proc.on('close', (code) => { if (!res.writableEnded) { if (code !== 0 && !res.headersSent) { res.writeHead(500, { 'Content-Type': 'text/plain' }); res.end('zip failed'); } else if (res.writableEnded) {} else res.end(); } });
+      return;
+    }
+    const data = await fsp.readFile(full);
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${path.basename(full).replace(/"/g, '')}"` });
+    return res.end(data);
   }
   if (pathname === '/api/logs' && method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
