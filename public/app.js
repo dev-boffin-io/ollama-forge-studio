@@ -110,6 +110,32 @@ function openSettings() {
   if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
 }
 
+async function resetSettings() {
+  const dlg = $('settingsDlg');
+  if (!confirm('Reset agent/runtime settings to defaults?')) return;
+  try {
+    const def = await api('/api/defaults');
+    $('sThinking').value = String(def.thinking === true);
+    $('sTemperature').value = def.temperature == null ? '' : def.temperature;
+    $('sNumCtx').value = def.numCtx == null ? '' : def.numCtx;
+    $('sMaxIterations').value = def.maxIterations == null ? '' : def.maxIterations;
+    $('sRequestTimeoutMs').value = def.requestTimeoutMs == null ? '' : def.requestTimeoutMs;
+    $('sSystemPrompt').value = def.systemPrompt || '';
+    const patch = {
+      thinking: def.thinking,
+      temperature: def.temperature,
+      numCtx: def.numCtx,
+      maxIterations: def.maxIterations,
+      requestTimeoutMs: def.requestTimeoutMs,
+      systemPrompt: def.systemPrompt,
+    };
+    state.config = await api('/api/config', { method: 'PUT', body: JSON.stringify(patch) });
+    state.model = state.config.model;
+    if (dlg && dlg.open) dlg.close();
+    setStatus('reset to defaults', 'ok');
+  } catch (e) { setStatus(e.message, 'err'); }
+}
+
 async function saveSettings() {
   const patch = {
     thinking: $('sThinking').value === 'true',
@@ -1290,6 +1316,7 @@ $('mcpReload').addEventListener('click', async () => { $('statusBody').innerHTML
 $('saveConfig').addEventListener('click', saveConfig);
 $('settingsBtn').addEventListener('click', openSettings);
 if ($('settingsCancel')) $('settingsCancel').addEventListener('click', () => $('settingsDlg').close());
+if ($('settingsReset')) $('settingsReset').addEventListener('click', () => resetSettings().catch((e) => setStatus(e.message, 'err')));
 if ($('settingsSave')) $('settingsSave').addEventListener('click', () => saveSettings().catch((e) => setStatus(e.message, 'err')));
 $('refreshModels').addEventListener('click', loadModels);
 $('workDir').addEventListener('click', changeDir);
