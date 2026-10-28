@@ -77,6 +77,7 @@
       <div id="messages" class="messages"></div>
       <div id="cmdHint" class="cmdhint" hidden></div>
       <div id="attachBar" class="attachbar" hidden></div>
+      <div id="jobBar" class="jobbar" hidden aria-live="polite"></div>
       <div class="chat-status" aria-live="polite">
         <span id="connStatus" class="status">idle</span>
         <span id="metricsBadge" class="status metrics" title="Context used / generation speed (last step)" hidden></span>
@@ -123,6 +124,7 @@
       <label><span>numCtx</span><input id="sNumCtx" type="number" min="0" step="256" /></label>
       <label><span>maxIterations</span><input id="sMaxIterations" type="number" min="1" step="1" /></label>
       <label><span>requestTimeoutMs</span><input id="sRequestTimeoutMs" type="number" min="1000" step="1000" /></label>
+      <label><span>Wake agent when a background job ends</span><select id="sWake"><option value="true">true</option><option value="false">false</option></select></label>
     </div>
     <label class="settings-block"><span>systemPrompt</span><textarea id="sSystemPrompt" rows="6" spellcheck="false"></textarea></label>
     <div class="row dlg-actions">

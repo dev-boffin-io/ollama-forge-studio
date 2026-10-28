@@ -26,6 +26,8 @@ const attach = require('./lib/attach');
 const runtime = require('./lib/runtime');
 const log = require('./lib/log');
 const { statusFor, explain } = require('./lib/errors');
+const { serveFile, downloadBlockedReason } = require('./lib/serve-file');
+const { createWaker } = require('./lib/wake');
 
 // A bug in one request/tool must never take the whole studio (and a running agent) down: log it and keep serving.
 let crashCount = 0;
@@ -188,7 +190,10 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true, count: models.length, models: models.slice(0, 50).map((m) => m.name) });
   }
 
-  if (pathname === '/api/processes' && method === 'GET') return sendJson(res, 200, { processes: procs.list() });
+  if (pathname === '/api/processes' && method === 'GET') {
+    const sid = url.searchParams.get('sessionId');
+    return sendJson(res, 200, { processes: procs.list(), ...(sid ? { sessionRunning: running.has(sid) } : {}) });
+  }
   if (seg[1] === 'processes' && seg.length === 3 && method === 'DELETE') return sendJson(res, 200, procs.kill(seg[2]));
 
   if (pathname === '/api/mcp' && method === 'GET') {
@@ -208,26 +213,30 @@ async function handleApi(req, res, url) {
     const level = await ws.listDir(dir);
     return sendJson(res, 200, { workDir: cfg.getWorkDir(), ...level, tree: level.entries });
   }
-  if (pathname === '/api/download' && method === 'GET') {
+  if (pathname === '/api/download' && (method === 'GET' || method === 'HEAD')) {
     const rel = url.searchParams.get('path') || '';
     const full = ws.safeResolve(rel);
     const st = await fsp.stat(full).catch(() => null);
     if (!st) throw new Error('not found');
+    // never hand out a build output that a running process is still writing (partial / corrupt file)
+    const blocked = downloadBlockedReason(rel, st, procs.list().some((p) => p.running));
+    if (blocked) return sendJson(res, 409, { error: blocked, busy: true });
     if (st.isDirectory()) {
       const base = path.basename(full) || 'folder';
       const safeName = base.replace(/[^\w.-]+/g, '_') || 'folder';
       res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${safeName}.zip"` });
+      if (method === 'HEAD') return res.end();
       const args = ['-r', '-q', '-', '.'];
       const proc = spawn('zip', args, { cwd: full, stdio: ['ignore', 'pipe', 'pipe'] });
       proc.stdout.pipe(res);
       proc.stderr.on('data', () => {});
       proc.on('error', (e) => { if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain' }); if (!res.writableEnded) res.end('zip failed: ' + e.message); });
       proc.on('close', (code) => { if (!res.writableEnded) { if (code !== 0 && !res.headersSent) { res.writeHead(500, { 'Content-Type': 'text/plain' }); res.end('zip failed'); } else if (res.writableEnded) {} else res.end(); } });
+      res.on('close', () => { try { proc.kill('SIGKILL'); } catch { /* already finished */ } });   // client left: stop zipping
       return;
     }
-    const data = await fsp.readFile(full);
-    res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${path.basename(full).replace(/"/g, '')}"` });
-    return res.end(data);
+    // regular file: Content-Length + Range (Pause/Resume), streamed from disk
+    return serveFile(req, res, full, st, { filename: path.basename(full) });
   }
   if (pathname === '/api/logs' && method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -442,9 +451,18 @@ async function handleChat(req, res) {
   let agent = agents.getAgent(session.agent) || agents.getAgent('build');
   if (agent.mode === 'subagent') return sendJson(res, 400, { error: `"${agent.name}" is a subagent; pick a primary agent` });
 
+  waker.onUserMessage(session.id);
+  launchRun({ session, config, agent, model, text, att, res });
+}
+
+/**
+ * Start an agent run on a session. `res` = the SSE response of the browser that sent the message (null for a
+ * wake-up turn started by the studio itself: the browser then attaches via /api/sessions/:id/attach).
+ */
+function launchRun({ session, config, agent, model, text, att, res, wake = false, wakeDisplay }) {
   const run = { id: session.id, ac: new AbortController(), events: [], subs: new Set(), base: null };
   running.set(session.id, run);
-  subscribe(run, res, { attach: false });
+  if (res) subscribe(run, res, { attach: false });
   const emit = (ev) => publish(run, ev);
   const myPermissions = new Set();
   const myQuestions = new Set();
@@ -469,9 +487,9 @@ async function handleChat(req, res) {
     try {
       if (!session.title) { session.title = (text || (att[0] && att[0].name) || 'attachment').replace(/\s+/g, ' ').slice(0, 60); session.autoTitle = !!text; }
       let content = text;
-      let display;
+      let display = wake ? wakeDisplay : undefined;
       let attachments;
-      const exp = text ? await commands.expand(text) : null;
+      const exp = text && !wake ? await commands.expand(text) : null;
       if (exp) {
         content = exp.text; display = text;
         if (exp.command.agent) { const ag = agents.getAgent(exp.command.agent); if (ag && ag.mode !== 'subagent') { session.agent = ag.name; agent = ag; } }
@@ -485,7 +503,7 @@ async function handleChat(req, res) {
       }
       session.turn = (session.turn || 0) + 1;
       session.revert = null; // a new message discards any pending redo
-      session.messages.push({ role: 'user', content, turn: session.turn, ...(display !== undefined ? { display } : {}), ...(attachments ? { attachments } : {}) });
+      session.messages.push({ role: 'user', content, turn: session.turn, ...(wake ? { notice: true } : {}), ...(display !== undefined ? { display } : {}), ...(attachments ? { attachments } : {}) });
       await sessions.save(session);
       run.base = session.messages.slice();     // shallow copy is enough (and instant): messages are replaced, not mutated, for the replay
       emit({ type: 'start', sessionId: session.id, title: session.title, agent: agent.name, model, workDir: cfg.getWorkDir() });
@@ -516,9 +534,34 @@ async function handleChat(req, res) {
       try { await sessions.save(session); } catch (e) { log.error('server', `could not save session ${session.id} at the end of the run`, e); emit({ type: 'warning', message: `Could not save the session: ${e.message}` }); }
       running.delete(session.id);
       for (const r of run.subs) if (!r.writableEnded) r.end();
+      waker.onRunEnd(session.id);   // a background process may have finished while this run was busy
     }
   })();
 }
+
+/* ---------- wake-up when a background process finishes ---------- */
+
+/** Start a turn on `sessionId` whose first message is the studio's notification (see lib/wake.js). false = busy, try later. */
+async function startWakeRun(sessionId, notice) {
+  if (running.has(sessionId)) return false;
+  const config = cfg.loadConfig();
+  const session = await sessions.get(sessionId);
+  if (running.has(sessionId)) return false;           // a user message won the race while the session was loading
+  const model = session.model || config.model;
+  if (!model) throw new Error('no model selected');
+  const agent = agents.getAgent(session.agent) || agents.getAgent('build');
+  if (!agent || agent.mode === 'subagent') throw new Error('no primary agent for this session');
+  launchRun({ session, config, agent, model, text: notice.text, att: [], res: null, wake: true, wakeDisplay: notice.display });
+  return true;
+}
+
+const waker = createWaker({
+  events: procs.events,
+  isRunning: (id) => running.has(id),
+  isSeen: (id) => procs.isSeen(id),
+  enabled: () => cfg.loadConfig().wakeOnProcessExit !== false,
+  start: startWakeRun,
+});
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);

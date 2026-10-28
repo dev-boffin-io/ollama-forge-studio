@@ -107,6 +107,7 @@ function openSettings() {
   $('sMaxIterations').value = c.maxIterations == null ? '' : c.maxIterations;
   $('sRequestTimeoutMs').value = c.requestTimeoutMs == null ? '' : c.requestTimeoutMs;
   $('sSystemPrompt').value = c.systemPrompt || '';
+  $('sWake').value = String(c.wakeOnProcessExit !== false);
   if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
 }
 
@@ -121,7 +122,9 @@ async function resetSettings() {
     $('sMaxIterations').value = def.maxIterations == null ? '' : def.maxIterations;
     $('sRequestTimeoutMs').value = def.requestTimeoutMs == null ? '' : def.requestTimeoutMs;
     $('sSystemPrompt').value = def.systemPrompt || '';
+    $('sWake').value = String(def.wakeOnProcessExit !== false);
     const patch = {
+      wakeOnProcessExit: def.wakeOnProcessExit,
       thinking: def.thinking,
       temperature: def.temperature,
       numCtx: def.numCtx,
@@ -144,6 +147,7 @@ async function saveSettings() {
     maxIterations: $('sMaxIterations').value === '' ? undefined : Number($('sMaxIterations').value),
     requestTimeoutMs: $('sRequestTimeoutMs').value === '' ? undefined : Number($('sRequestTimeoutMs').value),
     systemPrompt: $('sSystemPrompt').value,
+    wakeOnProcessExit: $('sWake').value === 'true',
   };
   state.config = await api('/api/config', { method: 'PUT', body: JSON.stringify(patch) });
   state.model = state.config.model;
@@ -258,6 +262,9 @@ async function refreshContext(sessionId) {
 
 function newSession() {
   state.sessionId = null;
+  state.jobs = [];
+  renderJobBar();
+  applyComposerLock();
   $('metricsBadge').hidden = true;
   refreshContext(null);
   $('messages').innerHTML = '';
@@ -281,6 +288,7 @@ async function openSession(id) {
   if (state.agents.some((a) => a.name === s.agent)) $('agent').value = s.agent;
   if (s.model) { const opt = [...$('model').options].find((o) => o.value === s.model); if (opt) $('model').value = s.model; }
   renderSession(s);
+  pollJobs();
   renderTodos(s.todos || []);
   if (s.context && s.context.ctx > 0) showMetrics(s.context);
   else if (s.lastCtx) showMetrics({ ctx: s.lastCtx, used: s.lastUsed || 0, tps: s.lastTps || 0 });
@@ -323,6 +331,7 @@ function renderSession(s, from = null) {
 
 function renderOneMessage(m, i, cards) {
   if (m.role === 'user') {
+    if (m.notice) { addMessage('note', userText(m)).className = 'note'; return; }
     if (!m.summary) { const el = addMessage('user', userText(m)); if (i !== undefined) el.dataset.idx = i; decorateUser(el, m.attachments); }
     else addSummaryBlock(m.content.replace(/^Summary of the earlier conversation:\n/, ''));
   } else if (m.role === 'assistant') {
@@ -456,6 +465,7 @@ function renderTree() {
         dl.href = '/api/download?path=' + encodeURIComponent(node.path);
         dl.download = (node.name || 'folder') + '.zip';
         dl.title = 'Download folder as zip';
+        if (BUILD_PATH.test(node.path)) dl.dataset.build = '1';
         dl.textContent = '⬇ zip';
         dl.addEventListener('click', (e) => e.stopPropagation());
         row.append(label, dl);
@@ -477,6 +487,7 @@ function renderTree() {
         dl.href = '/api/download?path=' + encodeURIComponent(node.path);
         dl.download = node.name;
         dl.title = 'Download file';
+        if (BUILD_PATH.test(node.path)) dl.dataset.build = '1';
         dl.textContent = '⬇';
         dl.addEventListener('click', (e) => e.stopPropagation());
         row.append(label, dl);
@@ -863,6 +874,7 @@ async function startStream(makeFetch) {
   state.streaming = true;
   state.runDone = false;
   state.userStopped = false;
+  state.jobStatus = false;
   state.lastBytes = Date.now();
   $('send').textContent = 'Stop';
   state.abortController = new AbortController();
@@ -892,7 +904,7 @@ async function startStream(makeFetch) {
     clearInterval(watchdog);
     state.streaming = false;
     state.abortController = null;
-    $('send').textContent = 'Send';
+    applyComposerLock();                       // 'Send', or 'Stop' while a background process is still running
     state.dropped = false;
     if (!finished) {
       setStatus('reconnecting…', 'busy');
@@ -1375,6 +1387,7 @@ window.addEventListener('resize', () => { if (window.innerWidth > 900) closePane
 $('chatForm').addEventListener('submit', (e) => {
   e.preventDefault();
   if (state.streaming) { stopRun(); return; }
+  if (myJobs().length) { stopJobs(); return; }       // a background process is running: the only action is Stop
   const text = $('prompt').value.trim();
   const files = state.pending.filter((p) => p.status === 'ready');
   if (state.pending.some((p) => p.status === 'uploading')) { setStatus('wait — files are still uploading…', 'busy'); return; }
@@ -1390,6 +1403,107 @@ $('chatForm').addEventListener('submit', (e) => {
 $('prompt').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('chatForm').requestSubmit(); }
 });
+
+
+/* ---------- background jobs (builds, installs, servers) ----------
+   The agent starts a long process and ends its turn; the studio (not the model) tracks it. While one runs for the
+   current session the composer is locked to "Stop", a live card shows time / progress / last output line, and when it
+   ends the studio wakes the agent (server side) — here we only re-attach to that run or leave a short note. */
+
+const BUILD_PATH = /(^|[\\/])(build|dist|out|target|outputs|\.gradle|\.next)([\\/]|$)/i;
+const DEFAULT_PLACEHOLDER = $('prompt').placeholder;
+state.jobs = [];
+state.jobStatus = false;
+const jobsSeen = new Map();       // id -> was running at the previous poll
+
+const myJobs = () => state.jobs.filter((p) => p.running && state.sessionId && p.session_id === state.sessionId);
+const jobElapsed = (p) => (p.elapsed_ms || 0) + (Date.now() - (p._at || Date.now()));
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const pad = (n) => String(n).padStart(2, '0');
+  const h = Math.floor(s / 3600);
+  return h ? `${h}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}` : `${Math.floor(s / 60)}:${pad(s % 60)}`;
+}
+
+/** Send button = Send / Stop; textarea locked while a background process runs (only Stop is possible). */
+function applyComposerLock() {
+  const locked = !state.streaming && myJobs().length > 0;
+  $('prompt').disabled = locked;
+  $('attachBtn').disabled = locked;
+  $('prompt').placeholder = locked ? 'A background process is running — press Stop to cancel it. The agent reports when it finishes.' : DEFAULT_PLACEHOLDER;
+  $('send').textContent = state.streaming || locked ? 'Stop' : 'Send';
+  document.body.classList.toggle('jobs-running', state.jobs.some((p) => p.running));
+}
+
+function renderJobBar() {
+  const bar = $('jobBar');
+  const jobs = myJobs();
+  if (!jobs.length) { bar.hidden = true; bar.replaceChildren(); return; }
+  bar.hidden = false;
+  bar.replaceChildren(...jobs.map((p) => {
+    const pct = p.progress && p.progress.percent != null ? p.progress.percent : null;
+    const el = document.createElement('div');
+    el.className = 'job';
+    el.innerHTML =
+      `<div class="job-head"><span class="job-dot"></span><b>Running</b><span class="job-time">${fmtElapsed(jobElapsed(p))}</span>` +
+      (pct != null ? `<span class="job-pct">${pct}%</span>` : '') +
+      (p.progress && p.progress.task ? `<span class="job-task">${escapeHtml(p.progress.task)}</span>` : '') +
+      `<button class="btn small ghost" type="button" data-jobkill="${escapeHtml(p.id)}">Stop</button></div>` +
+      `<code class="job-cmd">${escapeHtml(p.command)}</code>` +
+      (pct != null ? `<div class="job-bar"><i style="width:${pct}%"></i></div>` : '') +
+      (p.last_line ? `<div class="job-last">${escapeHtml(p.last_line)}</div>` : '');
+    return el;
+  }));
+}
+
+async function killJob(id) {
+  try { await api(`/api/processes/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch (e) { setStatus(e.message, 'err'); }
+  setStatus('stopping background process…', 'busy');
+  state.jobStatus = false;
+  setTimeout(pollJobs, 600);
+}
+const stopJobs = () => Promise.all(myJobs().map((p) => killJob(p.id)));
+$('jobBar').addEventListener('click', (e) => { const b = e.target.closest('[data-jobkill]'); if (b) killJob(b.dataset.jobkill); });
+
+async function onJobFinished(p) {
+  loadTree().catch(() => {});                       // new build outputs
+  await new Promise((r) => setTimeout(r, 1600));    // give the server a moment to start the agent's wake-up turn
+  if (state.streaming || p.session_id !== state.sessionId) return;
+  let agentRunning = false;
+  try { agentRunning = !!(await (await fetch(`/api/processes?sessionId=${encodeURIComponent(state.sessionId)}`)).json()).sessionRunning; } catch { /* offline: just show the note */ }
+  if (agentRunning) { resumeIfRunning(); return; }
+  const what = p.killed ? '■ stopped' : p.exit_code === 0 ? '✔ finished' : `✖ failed (exit ${p.exit_code})`;
+  addMessage('note', `${what} · ${p.id} · ${fmtElapsed(p.elapsed_ms)}`).className = 'note';
+}
+
+let jobsPolling = false;
+async function pollJobs() {
+  if (jobsPolling || document.hidden) return;
+  jobsPolling = true;
+  try {
+    const url = '/api/processes' + (state.sessionId ? `?sessionId=${encodeURIComponent(state.sessionId)}` : '');
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) return;
+    const r = await res.json();
+    const now = Date.now();
+    state.jobs = (r.processes || []).map((p) => ({ ...p, _at: now }));
+    for (const p of state.jobs) {
+      if (jobsSeen.get(p.id) === true && !p.running) onJobFinished(p);
+      jobsSeen.set(p.id, p.running);
+    }
+    renderJobBar();
+    applyComposerLock();
+    if (!state.streaming) {
+      if (myJobs().length) { if (!state.jobStatus) { state.jobStatus = true; setStatus('background process running…', 'busy'); } }
+      else if (state.jobStatus) { state.jobStatus = false; setStatus('ready', 'ok'); }
+      if (r.sessionRunning) resumeIfRunning();      // the studio started a wake-up turn while this page was idle
+    }
+  } catch { /* the server is busy or unreachable: try again on the next tick */ }
+  finally { jobsPolling = false; }
+}
+setInterval(pollJobs, 3000);
+setInterval(() => { if (myJobs().length) renderJobBar(); }, 1000);     // the clock on the card
+document.addEventListener('visibilitychange', () => { if (!document.hidden) pollJobs(); });
 
 /** Startup failures must be visible (and retryable), never a silently blank page. */
 function showFatal(title, err, retry) {

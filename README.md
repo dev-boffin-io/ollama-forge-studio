@@ -307,9 +307,28 @@ Several `task` calls in one model message run **in parallel**.
 
 ## Long-running commands, Stop and reconnecting
 
-- **Servers/watchers:** `bash` has `background: true` (the model is told to use it for file servers, dev servers,
-  watchers). Background processes are tracked: the `process` tool (`list` / `output` / `kill`) and **Tools → Background
-  processes → Kill** in the UI manage them; they die when the studio exits.
+- **Long jobs and servers (builds, installs, watchers):** `bash` has `background: true`. The model starts the job, tells
+  you in one sentence and **ends its turn** — it never sits there polling (polling used to fill the context window).
+  The studio itself tracks the process (`lib/procs.js`):
+  - **Live card + Stop-only composer.** While a background process of the current session runs, a card above the input
+    shows the elapsed time, progress (Gradle `> Task`, `NN%`, `[n/m]` parsed from the output — no model involved),
+    the last output line and a **Stop** button. The textarea is locked and the Send button becomes **Stop**.
+  - **The studio wakes the agent when the job ends.** When the process exits and the agent is idle, the studio starts a
+    short turn by itself with a notification (exit code + end of the output, shown in the chat as `🔔 proc_3 finished`);
+    the model reports the result or fixes the error. This costs one short turn instead of dozens of polling calls — no
+    token system needed. Rules: a job you stopped never wakes anything; a result the model already read itself is not
+    announced again; notices wait while the agent is busy; several jobs ending together give one turn; at most 8
+    automatic turns in a row without a message from you. Switch it off with `wakeOnProcessExit: false`
+    (Settings → *Wake agent when a background job ends*).
+  - **Logs on disk:** every background process also writes `~/.studio/<project>/jobs/<id>-<time>.log` (kept 7 days).
+  - The `process` tool (`list` / `output` / `kill`) and **Tools → Background processes → Kill** still work; jobs die
+    when the studio exits.
+- **Downloads** (`GET /api/download?path=`) are real file downloads: `Content-Length` (the browser shows the total
+  size), `Accept-Ranges` + `206 Partial Content` (Pause/Resume and continuing after a dropped connection),
+  `ETag`/`If-Range` (a resume never glues a new file onto an old partial one) and streaming from disk. Files inside
+  build/output folders (`build`, `dist`, `out`, `target`, `outputs`, …) are refused with `409` — and greyed out in the
+  file tree — while a background process is running, and files modified in the last 3 seconds are refused too, so a
+  half-written APK can't be downloaded. Folder downloads are zipped on the fly (size unknown by nature).
 - **Foreground commands** have stdin closed and are killed as a whole *process group* on timeout or Stop, so a server
   started inside a command can no longer survive and block the run (the old "this session is already running" hang).
 - **Runs live on the server.** If the tab is closed, the phone suspends the browser, or the connection drops, the agent
@@ -339,7 +358,7 @@ walking up from the directory to the git root (first match wins), plus any files
 
 Layered: defaults < `config.json` (global) < `~/.studio/<project>/config.json` (per directory, optional).
 Keys: `endpoint`, `model`, `smallModel`, `providers`, `defaultProvider`, `agent`, `temperature`, `numCtx`, `autoCtxMax`,
-`maxIterations`, `requestTimeoutMs`, `autoCompact`, `permission`, `instructions`, `mcp`, `lsp`, `websearch`, `skills`,
+`maxIterations`, `requestTimeoutMs`, `autoCompact`, `wakeOnProcessExit`, `permission`, `instructions`, `mcp`, `lsp`, `websearch`, `skills`,
 `toolOutput`, `systemPrompt`.
 
 ## HTTP API
@@ -363,7 +382,7 @@ Keys: `endpoint`, `model`, `smallModel`, `providers`, `defaultProvider`, `agent`
 | POST | `/api/permission` `{id, reply}` | answer a permission request |
 | POST | `/api/abort` `{sessionId}` | stop a run |
 | GET | `/api/sessions/:id/attach` | SSE: (re)attach to a running session, replays the run |
-| GET / DELETE | `/api/processes`, `/api/processes/:id` | background processes |
+| GET / DELETE | `/api/processes[?sessionId=]`, `/api/processes/:id` | background processes (`session_id`, `progress`, `last_line`, `killed`; with `sessionId` also `sessionRunning`) |
 | POST | `/api/answer` `{id, answer}` | answer a `question` from the agent |
 | POST | `/api/sessions/:id/undo` / `redo` | revert / re-apply the last turn |
 
@@ -398,7 +417,9 @@ lib/lsp.js           LSP client + diagnostics
 lib/skills.js        SKILL.md loader
 lib/web.js           webfetch / websearch
 lib/snapshot.js      shadow-git snapshots
-lib/procs.js         foreground/background process management
+lib/procs.js         foreground/background process management (exit events, progress, job logs)
+lib/wake.js          wakes the agent when a background process finishes
+lib/serve-file.js    file downloads: Content-Length, Range/resume, build-output guard
 public/              UI
 test/                unit + smoke tests (`npm test`, node --test)
 ```

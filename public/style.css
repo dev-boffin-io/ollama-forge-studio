@@ -374,3 +374,19 @@ select { min-width: 200px; }
   .chat .pane-head h2 { display: none; }
   .messages { padding: 10px; }
 }
+
+/* ---- background jobs (long processes): live card, composer locked to "Stop" ---- */
+.jobbar { padding: 6px 12px; border-top: 1px solid var(--border); background: var(--bg); display: flex; flex-direction: column; gap: 6px; max-height: 34vh; overflow: auto; }
+.job { background: var(--bg-3); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.job-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.job-head .btn { margin-left: auto; }
+.job-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); animation: jobpulse 1.2s ease-in-out infinite; }
+@keyframes jobpulse { 50% { opacity: .25; } }
+.job-time, .job-pct { font-family: var(--mono); color: var(--muted); }
+.job-task { font-family: var(--mono); color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.job-cmd { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.job-bar i { display: block; height: 100%; background: var(--accent); transition: width .4s; }
+.job-last { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.jobs-running .tree-dl[data-build] { opacity: .3; pointer-events: none; }   /* build output is still being written */
+#prompt:disabled { opacity: .6; cursor: not-allowed; }
