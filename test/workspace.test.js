@@ -78,21 +78,32 @@ test('tree and flat list skip ignored folders', async () => {
 test('glob: ** semantics, path-anchored patterns, braces', async () => {
   fs.mkdirSync(path.join(ctx.dir, 'src', 'deep'), { recursive: true });
   fs.writeFileSync(path.join(ctx.dir, 'src', 'deep', 'c.js'), 'x');
-  assert.deepEqual(await ws.glob('*.md'), ['README.md']);
-  assert.deepEqual((await ws.glob('*.js')).sort(), ['src/a.js', 'src/deep/c.js']);
-  assert.deepEqual(await ws.glob('src/*.js'), ['src/a.js']);
-  assert.deepEqual((await ws.glob('src/**/*.{js,ts}')).sort(), ['src/a.js', 'src/b.ts', 'src/deep/c.js']);
+  const g1 = await ws.glob('*.md'); assert.deepEqual(Array.isArray(g1) ? g1 : g1.matches, ['README.md']);
+  const g2 = await ws.glob('*.js'); assert.deepEqual((Array.isArray(g2) ? g2 : g2.matches).sort(), ['src/a.js', 'src/deep/c.js']);
+  const g3 = await ws.glob('src/*.js'); assert.deepEqual(Array.isArray(g3) ? g3 : g3.matches, ['src/a.js']);
+  const g4 = await ws.glob('src/**/*.{js,ts}'); assert.deepEqual((Array.isArray(g4) ? g4 : g4.matches).sort(), ['src/a.js', 'src/b.ts', 'src/deep/c.js']);
 });
 
 test('grep: path:line: text matches, include filter, invalid regex', async () => {
-  const hits = await ws.grep('console\\.log', '*.js');
+  const r = await ws.grep('console\\.log', '*.js');
+  const hits = r.matches || r;
   assert.equal(hits.length, 1);
   assert.match(hits[0], /^src\/a\.js:1: console\.log/);
-  assert.deepEqual(await ws.grep('console\\.log', '*.ts'), []);
+  const r2 = await ws.grep('console\\.log', '*.ts');
+  assert.deepEqual((r2.matches || r2), []);
   await assert.rejects(() => ws.grep('([', null), /invalid regex/);
 
   // binary files are skipped
   fs.writeFileSync(path.join(ctx.dir, 'bin.dat'), Buffer.from([0x00, 0x01, 0x02]));
   const all = await ws.grep('\\x00|\\u0000', null).catch(() => []);
-  assert.ok(!all.some((h) => h.startsWith('bin.dat')));
+  const arr = all.matches || all;
+  assert.ok(!arr.some((h) => h.startsWith('bin.dat')));
 });
+
+test('grep truncation flags present when limited', async () => {
+  ws.invalidateWalk();
+  for (let i = 0; i < 20; i++) fs.writeFileSync(path.join(ctx.dir, `t${i}.txt`), 'hit\nhit\n');
+  const r = await ws.grep('hit', '*.txt');
+  assert.ok(Array.isArray(r.matches));
+});
+

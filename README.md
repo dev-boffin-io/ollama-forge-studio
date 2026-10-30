@@ -175,8 +175,7 @@ or crash never loses work. Reopen the studio in the same directory and the sessi
 
 ## Tools
 
-`list_files`, `glob`, `grep`, `read_file` (line numbers, 5000-line / size cap, binary detection, "did you mean"),
-`write_file`, `edit_file`, `delete_file`, `bash`, `todo_write`, `task` (subagents, resumable with `task_id`),
+`list_files`, `glob` (truncated results signal), `grep` (truncated results signal), `read_file` (line numbers, 5000-line / size cap, binary detection, "did you mean", array of paths), `move_file`, `write_file`, `edit_file` (dry_run), `multi_edit`, `json_edit`, `delete_file`, `bash`, `todo_write`, `task` (subagents, resumable with `task_id`),
 `question` (ask you a question, with options), `plan_exit` (plan agent only), `webfetch`, `websearch`, `skill`, `lsp`,
 and any MCP tools.
 

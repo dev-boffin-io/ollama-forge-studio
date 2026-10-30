@@ -56,7 +56,8 @@ test('grep: finds matches across files (parallel) with stable ordering', async (
   ws.invalidateWalk();
   fs.writeFileSync(path.join(ctx.dir, 'g1.js'), 'const needle = 1;\n');
   fs.writeFileSync(path.join(ctx.dir, 'g2.js'), 'nothing\nneedle again\n');
-  const m = await ws.grep('needle', '*.js');
+  const r = await ws.grep('needle', '*.js');
+  const m = (r.matches || r);
   assert.deepEqual(m.filter((x) => x.startsWith('g')).map((x) => x.split(':').slice(0, 2).join(':')), ['g1.js:1', 'g2.js:2']);
 });
 
