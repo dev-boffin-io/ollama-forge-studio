@@ -87,3 +87,55 @@ test('websearch throws clear error if ddg returns unparseable html', async () =>
     global.fetch = orig;
   }
 });
+
+test('recency passed only via df; query remains clean', async () => {
+  const web2 = require('../lib/web');
+  web2.websearch._cache.clear();
+  const orig = global.fetch;
+  let seenUrl = '';
+  global.fetch = async (url) => { seenUrl = String(url); return new Response('<a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fq">Q</a><a class="result__snippet">s</a>', { status: 200 }); };
+  try {
+    await web2.websearch('my test query', {}, 5, { recency: 'week' });
+    const u = new URL(seenUrl);
+    assert.equal(u.searchParams.get('df'), 'w');
+    assert.equal(u.searchParams.get('q'), 'my test query');
+  } finally {
+    global.fetch = orig;
+  }
+});
+
+test('recency day/month/year map and invalid recency omitted', async () => {
+  const web2 = require('../lib/web');
+  web2.websearch._cache.clear();
+  const orig = global.fetch;
+  const urls = [];
+  global.fetch = async (url) => { urls.push(String(url)); return new Response('<a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fq">Q</a><a class="result__snippet">s</a>', { status: 200 }); };
+  try {
+    await web2.websearch('q1', {}, 1, { recency: 'day' });
+    await web2.websearch('q2', {}, 1, { recency: 'month' });
+    await web2.websearch('q3', {}, 1, { recency: 'year' });
+    await web2.websearch('q4', {}, 1, { recency: 'bad' });
+    assert.equal(new URL(urls[0]).searchParams.get('df'), 'd');
+    assert.equal(new URL(urls[1]).searchParams.get('df'), 'm');
+    assert.equal(new URL(urls[2]).searchParams.get('df'), 'y');
+    assert.equal(new URL(urls[3]).searchParams.get('df'), null);
+  } finally {
+    global.fetch = orig;
+  }
+});
+
+test('site_type docs/news applied without polluting recency mapping', async () => {
+  const web2 = require('../lib/web');
+  web2.websearch._cache.clear();
+  const orig = global.fetch;
+  let seen = '';
+  global.fetch = async (url) => { seen = String(url); return new Response('<a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fq">Q</a><a class="result__snippet">s</a>', { status: 200 }); };
+  try {
+    await web2.websearch('test', {}, 1, { recency: 'day', site_type: 'docs' });
+    const u = new URL(seen);
+    assert.equal(u.searchParams.get('df'), 'd');
+    assert.ok(u.searchParams.get('q').includes('documentation'));
+  } finally {
+    global.fetch = orig;
+  }
+});
