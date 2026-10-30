@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setup } = require('./helpers');
+const os = require("node:os");
 
 const ctx = setup();
 const tools = require('../lib/tools');
@@ -119,23 +120,43 @@ test('multi_edit fails mid-sequence and file unchanged', async () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const tools = require('../lib/tools');
-  const cfg = ctx.cfg;
-  const wd = cfg.getWorkDir();
-  fs.writeFileSync(path.join(wd, 'm2.txt'), 'x\ny\n');
-  await assert.rejects(() => tools.executeTool('multi_edit', { path: 'm2.txt', edits: [{ old_string: 'x', new_string: 'X' }, { old_string: 'MISSING', new_string: 'z' }] }, { agent: { name: 'build' }, config: cfg.loadConfig(), session: { id: 's1', messages: [], journal: [], turn: 0 }, root: { journal: [], turn: 0 }, inherited: [], emit: () => {}, askPermission: async () => 'once', askUser: async () => '' }), /multi_edit failed/);
-  assert.equal(fs.readFileSync(path.join(wd, 'm2.txt'), 'utf8'), 'x\ny\n');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ofs-m2-' + Date.now()));
+  const prev = process.env.OLLAMA_STUDIO_HOME;
+  process.env.OLLAMA_STUDIO_HOME = tmp;
+  const cfg = require('../lib/config');
+  cfg._cache = null;
+  try {
+    const wd = cfg.getWorkDir();
+    fs.writeFileSync(path.join(wd, 'm2.txt'), 'x\ny\n');
+    await assert.rejects(() => tools.executeTool('multi_edit', { path: 'm2.txt', edits: [{ old_string: 'x', new_string: 'X' }, { old_string: 'MISSING', new_string: 'z' }] }, { agent: { name: 'build' }, config: cfg.loadConfig(), session: { id: 's1', messages: [], journal: [], turn: 0 }, root: { journal: [], turn: 0 }, inherited: [], emit: () => {}, askPermission: async () => 'once', askUser: async () => '' }), /multi_edit failed/);
+    assert.equal(fs.readFileSync(path.join(wd, 'm2.txt'), 'utf8'), 'x\ny\n');
+  } finally {
+    process.env.OLLAMA_STUDIO_HOME = prev;
+    cfg._cache = null;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('edit_file dry_run does not change file and reports match', async () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const tools = require('../lib/tools');
-  const cfg = ctx.cfg;
-  const wd = cfg.getWorkDir();
-  fs.writeFileSync(path.join(wd, 'd.txt'), 'hello world\n');
-  const res = await tools.executeTool('edit_file', { path: 'd.txt', old_string: 'world', new_string: 'there', dry_run: true }, { agent: { name: 'build' }, config: cfg.loadConfig(), session: { id: 's1', messages: [], journal: [], turn: 0 }, root: { journal: [], turn: 0 }, inherited: [], emit: () => {}, askPermission: async () => 'once', askUser: async () => '' });
-  assert.equal(res.dry_run, true);
-  assert.equal(fs.readFileSync(path.join(wd, 'd.txt'), 'utf8'), 'hello world\n');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ofs-d-' + Date.now()));
+  const prev = process.env.OLLAMA_STUDIO_HOME;
+  process.env.OLLAMA_STUDIO_HOME = tmp;
+  const cfg = require('../lib/config');
+  cfg._cache = null;
+  try {
+    const wd = cfg.getWorkDir();
+    fs.writeFileSync(path.join(wd, 'd.txt'), 'hello world\n');
+    const res = await tools.executeTool('edit_file', { path: 'd.txt', old_string: 'world', new_string: 'there', dry_run: true }, { agent: { name: 'build' }, config: cfg.loadConfig(), session: { id: 's1', messages: [], journal: [], turn: 0 }, root: { journal: [], turn: 0 }, inherited: [], emit: () => {}, askPermission: async () => 'once', askUser: async () => '' });
+    assert.equal(res.dry_run, true);
+    assert.equal(fs.readFileSync(path.join(wd, 'd.txt'), 'utf8'), 'hello world\n');
+  } finally {
+    process.env.OLLAMA_STUDIO_HOME = prev;
+    cfg._cache = null;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('json_edit get/set/delete with indentation and arrays', async () => {
