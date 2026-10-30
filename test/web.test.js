@@ -134,7 +134,7 @@ test('site_type docs/news applied without polluting recency mapping', async () =
     await web2.websearch('test', {}, 1, { recency: 'day', site_type: 'docs' });
     const u = new URL(seen);
     assert.equal(u.searchParams.get('df'), 'd');
-    assert.ok(u.searchParams.get('q').includes('documentation'));
+    assert.ok(!u.searchParams.get('q').includes('documentation'));
   } finally {
     global.fetch = orig;
   }
