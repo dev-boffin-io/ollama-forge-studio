@@ -358,11 +358,14 @@ function renderOneMessage(m, i, cards) {
 
 function renderTodos(todos) {
   const el = $('todos');
-  el.hidden = !todos.length;
-  el.innerHTML = todos.map((t) => {
+  // an empty list, or one where everything is done, is not worth a panel
+  if (!todos.length || todos.every((t) => t.status === 'completed')) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  el.innerHTML = '<button type="button" class="todos-close" title="Hide task list" aria-label="Hide task list">✕</button>' + todos.map((t) => {
     const mark = t.status === 'completed' ? '☑' : t.status === 'in_progress' ? '▶' : '☐';
     return `<div class="${t.status}">${mark} ${escapeHtml(t.content)}</div>`;
   }).join('');
+  el.querySelector('.todos-close').onclick = () => { el.hidden = true; el.innerHTML = ''; };
 }
 
 async function forkSession() {
