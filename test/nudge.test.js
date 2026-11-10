@@ -45,7 +45,7 @@ function startServer() {
   });
 }
 
-async function chat(base, text, sessionId) {
+async function chat(base, text, sessionId, onEvent) {
   const res = await fetch(base + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, model: 'fake', agent: 'build', ...(sessionId ? { sessionId } : {}) }) });
   assert.equal(res.status, 200);
   const events = [];
@@ -60,7 +60,11 @@ async function chat(base, text, sessionId) {
     while ((i = buf.indexOf('\n\n')) !== -1) {
       const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data: '));
       buf = buf.slice(i + 2);
-      if (line) events.push(JSON.parse(line.slice(6)));
+      if (line) {
+        const ev = JSON.parse(line.slice(6));
+        events.push(ev);
+        if (onEvent) await onEvent(ev);
+      }
     }
   }
   return events;
@@ -78,7 +82,7 @@ test('a turn that stops with open todos is nudged and continued; a finished list
   const { child, port } = await startServer();
   t.after(() => { child.kill('SIGKILL'); fake.srv.close(); });
   const base = `http://127.0.0.1:${port}`;
-  await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
+  await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, nudgePrompt: false, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
 
   const ev = await chat(base, 'build the thing');
   assert.ok(ev.some((e) => e.type === 'info' && /এগিয়ে/.test(e.text)), 'the unfinished turn should be nudged');
@@ -99,7 +103,7 @@ test('todos left open in an earlier turn do not nudge a later turn', async (t) =
   const { child, port } = await startServer();
   t.after(() => { child.kill('SIGKILL'); fake.srv.close(); });
   const base = `http://127.0.0.1:${port}`;
-  await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
+  await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, nudgePrompt: false, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
 
   const first = await chat(base, 'plan it');
   const sid = first.find((e) => e.type === 'start').sessionId;
@@ -110,4 +114,75 @@ test('todos left open in an earlier turn do not nudge a later turn', async (t) =
   const second = await chat(base, 'hello', sid);
   assert.equal(laterCalls, 1, 'a stale todo must not make the model run again');
   assert.ok(!second.some((e) => e.type === 'info' && /এগিয়ে/.test(e.text)), 'the later turn is not nudged');
+});
+
+test('the nudge asks the user before continuing; approving sends the nudge', async (t) => {
+  const todos = (status) => ({ tool_calls: [{ function: { name: 'todo_write', arguments: { todos: [{ content: 'Install deps', status }] } } }] });
+  const fake = await fakeOllama((req) => {
+    const nudged = req.messages.some((m) => m.role === 'user' && /not finished/.test(m.content || ''));
+    if (!req.messages.some((m) => m.role === 'tool')) return todos('in_progress');
+    if (!nudged) return { content: 'still working' };
+    if (req.messages.filter((m) => m.role === 'tool').length < 2) return todos('completed');
+    return { content: 'done' };
+  });
+  const { child, port } = await startServer();
+  t.after(() => { child.kill('SIGKILL'); fake.srv.close(); });
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, nudgePrompt: true, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
+
+  let asked = null;
+  const ev = await chat(base, 'build the thing', undefined, async (e) => {
+    if (e.type !== 'question') return;
+    asked = e;
+    await fetch(base + '/api/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: e.id, answer: 'Yes, continue' }) });
+  });
+  assert.ok(asked, 'the user is asked before the agent is nudged');
+  assert.deepEqual(asked.options, ['Yes, continue', 'No, stop']);
+  assert.match(asked.question, /Continue\?/);
+  assert.ok(fake.requests.some((r) => r.messages.some((m) => /not finished/.test(m.content || ''))), 'approving sends the nudge');
+  assert.ok(ev.some((e) => e.type === 'done'));
+});
+
+test('the user can decline the nudge', async (t) => {
+  const pending = { tool_calls: [{ function: { name: 'todo_write', arguments: { todos: [{ content: 'Old task', status: 'in_progress' }] } } }] };
+  const fake = await fakeOllama((req) => {
+    if (!req.messages.some((m) => m.role === 'tool')) return pending;
+    return { content: 'still working' };
+  });
+  const { child, port } = await startServer();
+  t.after(() => { child.kill('SIGKILL'); fake.srv.close(); });
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, nudgePrompt: true, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
+
+  let asked = null;
+  const ev = await chat(base, 'build the thing', undefined, async (e) => {
+    if (e.type !== 'question') return;
+    asked = e;
+    await fetch(base + '/api/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: e.id, answer: 'No, stop' }) });
+  });
+  assert.ok(asked, 'the user is asked');
+  assert.ok(!fake.requests.some((r) => r.messages.some((m) => /not finished/.test(m.content || ''))), 'declining does not send the nudge');
+  assert.ok(ev.some((e) => e.type === 'done'));
+});
+
+test('a custom answer is sent to the model as a user message', async (t) => {
+  const pending = { tool_calls: [{ function: { name: 'todo_write', arguments: { todos: [{ content: 'Old task', status: 'in_progress' }] } } }] };
+  const fake = await fakeOllama((req) => {
+    if (req.messages.some((m) => m.role === 'user' && String(m.content || '').includes('also update the docs'))) return { content: 'ok' };
+    if (!req.messages.some((m) => m.role === 'tool')) return pending;
+    return { content: 'still working' };
+  });
+  const { child, port } = await startServer();
+  t.after(() => { child.kill('SIGKILL'); fake.srv.close(); });
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, nudgePrompt: true, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
+
+  let asked = null;
+  await chat(base, 'build the thing', undefined, async (e) => {
+    if (e.type !== 'question') return;
+    asked = e;
+    await fetch(base + '/api/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: e.id, answer: 'also update the docs' }) });
+  });
+  assert.ok(asked, 'the user is asked');
+  assert.ok(fake.requests.some((r) => r.messages.some((m) => m.role === 'user' && String(m.content || '').includes('also update the docs'))), 'the custom answer reaches the model');
 });

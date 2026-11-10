@@ -57,7 +57,8 @@ npm run build            # → dist/ollama-forge-studio  (dist/ollama-forge-stud
   it can be started manually from the Actions tab too.
 - The UI (`public/*`) is embedded in the binary. Without a source tree, the global `config.json` is read/written at
   `~/.config/ollama-studio/config.json` (`$XDG_CONFIG_HOME` honoured) next to your global agents/commands/skills.
-  Per-project data still lives in `~/.studio/<project>/`.
+  Per-project data still lives in `~/.studio/<project>/`. Set `OLLAMA_STUDIO_CONFIG` to use a different config file
+  (the tests use this to keep `config.json` out of the source tree).
 - `git` is still needed on PATH for snapshots/undo (as in source mode); the studio runs fine without it.
 
 ## Tests
@@ -336,6 +337,10 @@ Several `task` calls in one model message run **in parallel**.
 - **Stop is a real stop:** it aborts the model request and kills running commands. What the model had already written is
   saved (`[response interrupted by the user]`), interrupted tool calls are marked, and the next message ("continue") is told
   the turn was interrupted; the task list (`todo_write`) is part of the prompt, so it resumes instead of restarting.
+- **Unfinished-work nudge asks first.** If a turn ends while its own task list is still open (or the model says it will
+  continue but makes no tool call), the agent asks **Continue?** with *Yes, continue* / *No, stop* / a custom instruction
+  instead of silently forcing another step. Stale todos from earlier turns never trigger it. Set `"nudgePrompt": false`
+  to restore automatic nudging.
 - Sending a message to a running session is refused with a hint (or pass `"interrupt": true` to `/api/chat` to stop it first).
 - The UI re-opens the last session of the directory on load instead of an empty chat.
 
@@ -357,7 +362,7 @@ walking up from the directory to the git root (first match wins), plus any files
 
 Layered: defaults < `config.json` (global) < `~/.studio/<project>/config.json` (per directory, optional).
 Keys: `endpoint`, `model`, `smallModel`, `providers`, `defaultProvider`, `agent`, `temperature`, `numCtx`, `autoCtxMax`,
-`maxIterations`, `requestTimeoutMs`, `autoCompact`, `wakeOnProcessExit`, `permission`, `instructions`, `mcp`, `lsp`, `websearch`, `skills`,
+`maxIterations`, `requestTimeoutMs`, `autoCompact`, `wakeOnProcessExit`, `nudgePrompt`, `permission`, `instructions`, `mcp`, `lsp`, `websearch`, `skills`,
 `toolOutput`, `systemPrompt`.
 
 ## HTTP API

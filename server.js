@@ -513,7 +513,7 @@ function launchRun({ session, config, agent, model, text, att, res, wake = false
       const startSnap = snapOn ? await snapshot.track(snapOpts) : null;
       if (startSnap) session.snaps[session.turn] = startSnap;
       else if (snapOn && snapshot.status() && !session.snapNoteShown) { session.snapNoteShown = true; emit({ type: 'info', text: `ℹ ${snapshot.status()}` }); }
-      const result = await runAgent({ session, root: session, agent, model, config, emit, signal: run.ac.signal, askPermission, askUser });
+      const result = await runAgent({ session, root: session, agent, model, config, emit, signal: run.ac.signal, askPermission, askUser, canPrompt: () => run.subs.size > 0 });
       if (startSnap) {
         const files = await snapshot.diff(startSnap, await snapshot.track(snapOpts));
         if (files.length) emit({ type: 'changes', files });

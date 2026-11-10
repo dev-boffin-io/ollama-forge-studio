@@ -9,6 +9,7 @@ const path = require('node:path');
 function setup() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-home-'));
   process.env.OLLAMA_STUDIO_HOME = home;
+  process.env.OLLAMA_STUDIO_CONFIG = path.join(home, 'config.json');   // never touch the project's config.json
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-proj-'));
   const cfg = require('../lib/config');
   cfg.setWorkDir(dir);
