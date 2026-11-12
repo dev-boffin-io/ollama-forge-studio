@@ -331,6 +331,11 @@ Several `task` calls in one model message run **in parallel**.
   half-written APK can't be downloaded. Folder downloads are zipped on the fly (size unknown by nature).
 - **Foreground commands** have stdin closed and are killed as a whole *process group* on timeout or Stop, so a server
   started inside a command can no longer survive and block the run (the old "this session is already running" hang).
+- **Terminal (for you, not the model):** the **Terminal** button opens a console panel where you run shell commands
+  directly in the working directory. Output streams live over SSE (`stdout`/`stderr` are coloured separately), **Stop**
+  kills the whole process group, command history is kept locally (↑/↓), and a reload re-attaches to a command that is
+  still running. Each Run is a fresh shell with stdin closed (no interactive prompts); the server owns the process.
+  Set `"terminal": false` to hide/disable it.
 - **Runs live on the server.** If the tab is closed, the phone suspends the browser, or the connection drops, the agent
   keeps working. Coming back to the tab re-attaches automatically and replays the run (permission/question cards
   included); a session list badge shows **● running**. A 15s keepalive + client watchdog detect frozen sockets.
@@ -362,7 +367,7 @@ walking up from the directory to the git root (first match wins), plus any files
 
 Layered: defaults < `config.json` (global) < `~/.studio/<project>/config.json` (per directory, optional).
 Keys: `endpoint`, `model`, `smallModel`, `providers`, `defaultProvider`, `agent`, `temperature`, `numCtx`, `autoCtxMax`,
-`maxIterations`, `requestTimeoutMs`, `autoCompact`, `wakeOnProcessExit`, `nudgePrompt`, `permission`, `instructions`, `mcp`, `lsp`, `websearch`, `skills`,
+`maxIterations`, `requestTimeoutMs`, `autoCompact`, `wakeOnProcessExit`, `nudgePrompt`, `terminal`, `permission`, `instructions`, `mcp`, `lsp`, `websearch`, `skills`,
 `toolOutput`, `systemPrompt`.
 
 ## HTTP API
@@ -387,6 +392,8 @@ Keys: `endpoint`, `model`, `smallModel`, `providers`, `defaultProvider`, `agent`
 | POST | `/api/abort` `{sessionId}` | stop a run |
 | GET | `/api/sessions/:id/attach` | SSE: (re)attach to a running session, replays the run |
 | GET / DELETE | `/api/processes[?sessionId=]`, `/api/processes/:id` | background processes (`session_id`, `progress`, `last_line`, `killed`; with `sessionId` also `sessionRunning`) |
+| GET / POST | `/api/terminal`, `/api/terminal/:id` | list / start (`{command}`) a user terminal; DELETE stops it |
+| GET | `/api/terminal/:id/stream` | SSE: buffered + live `output` (`stdout`/`stderr`, `seq`) then `exit` |
 | POST | `/api/answer` `{id, answer}` | answer a `question` from the agent |
 | POST | `/api/sessions/:id/undo` / `redo` | revert / re-apply the last turn |
 
@@ -422,6 +429,7 @@ lib/skills.js        SKILL.md loader
 lib/web.js           webfetch / websearch
 lib/snapshot.js      shadow-git snapshots
 lib/procs.js         foreground/background process management (exit events, progress, job logs)
+lib/terminal.js      user terminal: run a shell command in the workdir, stream output over SSE
 lib/wake.js          wakes the agent when a background process finishes
 lib/serve-file.js    file downloads: Content-Length, Range/resume, build-output guard
 public/              UI

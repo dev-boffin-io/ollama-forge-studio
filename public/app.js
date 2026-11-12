@@ -1508,6 +1508,146 @@ setInterval(pollJobs, 3000);
 setInterval(() => { if (myJobs().length) renderJobBar(); }, 1000);     // the clock on the card
 document.addEventListener('visibilitychange', () => { if (!document.hidden) pollJobs(); });
 
+/* ---------- terminal (user-run shell commands) ----------
+   A direct command runner for the human: each Run starts a fresh shell in the working directory and streams
+   stdout/stderr live over SSE. The server owns the process, so output keeps coming (and survives a reload). */
+
+const TERM_MAX_CHARS = 300000;
+const TERM_HISTORY_KEY = 'studio.term.history';
+const TERM_OPEN_KEY = 'studio.term.open';
+state.terminal = { id: null, running: false, es: null, lastSeq: 0 };
+
+const termOut = $('terminalOut');
+const termInput = $('terminalCmd');
+let termOutChars = 0;
+
+function termAppend(text, cls) {
+  if (!text) return;
+  const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = text;
+  termOut.appendChild(span);
+  termOutChars += text.length;
+  while (termOutChars > TERM_MAX_CHARS && termOut.firstChild) {
+    termOutChars -= termOut.firstChild.textContent.length;
+    termOut.removeChild(termOut.firstChild);
+  }
+  termOut.scrollTop = termOut.scrollHeight;
+}
+function termClear() { termOut.replaceChildren(); termOutChars = 0; }
+
+function termOpen(focus = true) {
+  $('terminalPanel').hidden = false;
+  try { localStorage.setItem(TERM_OPEN_KEY, '1'); } catch { /* storage blocked */ }
+  if (focus) termInput.focus();
+}
+function termClose() {
+  $('terminalPanel').hidden = true;
+  try { localStorage.setItem(TERM_OPEN_KEY, '0'); } catch { /* storage blocked */ }
+}
+
+function termSetRunning(running) {
+  state.terminal.running = running;
+  $('terminalStop').disabled = !running;
+  $('terminalRun').disabled = running;
+  termInput.disabled = running;
+  $('terminalStatus').textContent = running ? 'running' : 'idle';
+  $('terminalStatus').className = 'status' + (running ? ' busy' : '');
+}
+
+function termDisconnect() {
+  if (state.terminal.es) { state.terminal.es.close(); state.terminal.es = null; }
+}
+
+function termAttach(id) {
+  termDisconnect();
+  state.terminal.id = id;
+  state.terminal.lastSeq = 0;
+  const es = new EventSource(`/api/terminal/${encodeURIComponent(id)}/stream`);
+  state.terminal.es = es;
+  es.onmessage = (e) => {
+    let ev; try { ev = JSON.parse(e.data); } catch { return; }
+    if (ev.type === 'output') {
+      if (ev.seq != null && ev.seq <= state.terminal.lastSeq) return;   // EventSource reconnect: skip the replayed chunks
+      if (ev.seq != null) state.terminal.lastSeq = ev.seq;
+      termAppend(ev.text, ev.stream === 'stderr' ? 'err' : '');
+    } else if (ev.type === 'exit') {
+      termAppend(`\n[exit ${ev.code == null ? 'signal' : ev.code}${ev.killed ? ', stopped' : ''} · ${fmtElapsed(ev.durationMs || 0)}]\n`, 'meta');
+      termDisconnect();
+      termSetRunning(false);
+    }
+  };
+  es.onerror = () => {
+    // a network drop reconnects automatically (the replay is de-duplicated by seq); a 404 after a server restart
+    // closes the stream for good, so let the input become usable again.
+    if (es.readyState === EventSource.CLOSED) {
+      termAppend('\n[terminal stream closed]\n', 'meta');
+      state.terminal.es = null;
+      termSetRunning(false);
+    }
+  };
+  termSetRunning(true);
+}
+
+async function termRun(command) {
+  termAppend(`$ ${command}\n`, 'cmd');
+  const r = await api('/api/terminal', { method: 'POST', body: JSON.stringify({ command }) });
+  termAttach(r.id);
+}
+
+async function termStop() {
+  if (!state.terminal.id) return;
+  $('terminalStatus').textContent = 'stopping…';
+  $('terminalStatus').className = 'status busy';
+  try { await api(`/api/terminal/${encodeURIComponent(state.terminal.id)}`, { method: 'DELETE' }); } catch (e) { termAppend('✖ ' + e.message + '\n', 'err'); }
+}
+
+function termHistory() { try { return JSON.parse(localStorage.getItem(TERM_HISTORY_KEY) || '[]'); } catch { return []; } }
+let termHistIdx = -1;
+function termRemember(command) {
+  const h = termHistory().filter((x) => x !== command);
+  h.unshift(command);
+  try { localStorage.setItem(TERM_HISTORY_KEY, JSON.stringify(h.slice(0, 50))); } catch { /* storage blocked */ }
+  termHistIdx = -1;
+}
+
+$('terminalBtn').addEventListener('click', () => { if (state.terminal.enabled === false) return; if ($('terminalPanel').hidden) termOpen(); else termClose(); });
+$('terminalClose').addEventListener('click', termClose);
+$('terminalClear').addEventListener('click', termClear);
+$('terminalStop').addEventListener('click', termStop);
+$('terminalForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const command = termInput.value.trim();
+  if (!command || state.terminal.running) return;
+  termInput.value = '';
+  termRemember(command);
+  try { await termRun(command); } catch (err) { termAppend('✖ ' + err.message + '\n', 'err'); termSetRunning(false); }
+});
+termInput.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  const h = termHistory();
+  if (!h.length) return;
+  e.preventDefault();
+  if (e.key === 'ArrowUp') termHistIdx = Math.min(termHistIdx + 1, h.length - 1);
+  else termHistIdx = Math.max(termHistIdx - 1, -1);
+  termInput.value = termHistIdx === -1 ? '' : h[termHistIdx];
+});
+
+/** After a reload, re-attach to a terminal that is still running (the server keeps the process alive). */
+async function termRestore() {
+  let open = false;
+  try { open = localStorage.getItem(TERM_OPEN_KEY) === '1'; } catch { /* storage blocked */ }
+  try {
+    const r = await api('/api/terminal');
+    const all = r.terminals || [];
+    const running = all.filter((t) => t.running);
+    if (running.length) { termOpen(false); termAttach(running[running.length - 1].id); return; }
+    if (open) { termOpen(false); if (all.length) termAttach(all[all.length - 1].id); return; }
+  } catch { /* offline: the button still works once the server is back */ }
+  if (open) termOpen(false);
+}
+termRestore();
+
 /** Startup failures must be visible (and retryable), never a silently blank page. */
 function showFatal(title, err, retry) {
   const box = $('messages');
@@ -1528,6 +1668,9 @@ async function init() {
   try {
     const [, st] = await Promise.all([loadConfig(), api('/api/state')]);
     state.workDir = st.workDir;
+    state.terminal.enabled = st.terminal !== false;
+    $('terminalBtn').hidden = !state.terminal.enabled;
+    if (!state.terminal.enabled) { termClose(); termDisconnect(); }
     showWorkDir();
     state.commands = st.commands || [];
     fillAgents(st.agents, st.startup.agent || state.config.agent);

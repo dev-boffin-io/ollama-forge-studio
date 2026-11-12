@@ -320,8 +320,38 @@ select { min-width: 200px; }
 .tree li.hint { color: var(--muted); font-style: italic; }
 .more-msgs { display: block; margin: 6px auto 12px; }
 
+/* ---- terminal (user-run shell commands) ---- */
+.terminal {
+  flex: 0 0 auto; display: flex; flex-direction: column;
+  height: min(42vh, 360px);
+  background: #0b0e14; border-top: 1px solid var(--border);
+}
+.terminal[hidden] { display: none; }
+.terminal-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; background: var(--bg-2); border-bottom: 1px solid var(--border);
+}
+.terminal-title { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.terminal-head .spacer { flex: 1; }
+.terminal-out {
+  flex: 1; margin: 0; padding: 8px 10px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px; line-height: 1.45; color: #d7dae0;
+}
+.terminal-out .err { color: #ff7b72; }
+.terminal-out .cmd { color: #79c0ff; font-weight: 600; }
+.terminal-out .meta { color: #8b949e; }
+.terminal-form {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-top: 1px solid var(--border); background: var(--bg-2);
+}
+.terminal-prompt { color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.terminal-form input { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+
 /* ---- responsive / mobile ---- */
 @media (max-width: 900px) {
+  .terminal { height: min(50vh, 420px); }
   .topbar { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
   .menu-btn { display: inline-flex; align-items: center; justify-content: center; }
   .brand { flex: 1 1 auto; min-width: 0; gap: 8px; }

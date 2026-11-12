@@ -16,6 +16,7 @@ const lsp = require('./lib/lsp');
 const snapshot = require('./lib/snapshot');
 const skills = require('./lib/skills');
 const procs = require('./lib/procs');
+const terminal = require('./lib/terminal');
 const ws = require('./lib/workspace');
 const sessions = require('./lib/sessions');
 const agents = require('./lib/agents');
@@ -153,6 +154,7 @@ async function handleApi(req, res, url) {
       commands: Object.values(commands.loadCommands()).map((c) => ({ name: c.name, description: c.description })),
       skills: Object.values(skills.loadSkills(cfg.loadConfig())).map((x) => ({ name: x.name, description: x.description })),
       lsp: lsp.available(cfg.loadConfig()),
+      terminal: cfg.loadConfig().terminal !== false,
     });
   }
 
@@ -195,6 +197,38 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { processes: procs.list(), ...(sid ? { sessionRunning: running.has(sid) } : {}) });
   }
   if (seg[1] === 'processes' && seg.length === 3 && method === 'DELETE') return sendJson(res, 200, procs.kill(seg[2]));
+
+  if (pathname === '/api/terminal' && method === 'GET') return sendJson(res, 200, { terminals: terminal.list() });
+  if (pathname === '/api/terminal' && method === 'POST') {
+    if (cfg.loadConfig().terminal === false) return sendJson(res, 403, { error: 'the terminal is disabled in the config' });
+    const b = await readBody(req);
+    return sendJson(res, 200, terminal.start(b.command));
+  }
+  if (seg[1] === 'terminal' && seg.length === 3 && method === 'DELETE') return sendJson(res, 200, terminal.stop(seg[2]));
+  if (seg[1] === 'terminal' && seg.length === 4 && seg[3] === 'stream' && method === 'GET') {
+    const t = terminal.get(seg[2]);
+    if (!t) return sendJson(res, 404, { error: 'no such terminal' });
+    res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    sse(res, { type: 'start', id: t.id, command: t.command, cwd: t.cwd, pid: t.pid, running: t.running });
+    for (const c of t.chunks) sse(res, { type: 'output', stream: c.stream, text: c.text, seq: c.seq });
+    if (!t.running) {
+      sse(res, { type: 'exit', code: t.exit_code, durationMs: t.elapsed_ms, killed: t.killed });
+      return res.end();
+    }
+    const unsub = terminal.subscribe(t.id, (ev) => {
+      sse(res, ev);
+      if (ev.type === 'exit') { unsub(); try { res.end(); } catch { /* closed */ } }
+    }) || (() => {});
+    // the process may have exited between the snapshot above and subscribe(): close the race
+    const now = terminal.get(t.id);
+    if (now && !now.running) {
+      sse(res, { type: 'exit', code: now.exit_code, durationMs: now.elapsed_ms, killed: now.killed });
+      unsub();
+      return res.end();
+    }
+    res.on('close', () => { if (unsub) unsub(); });
+    return;
+  }
 
   if (pathname === '/api/mcp' && method === 'GET') {
     await mcp.ensureStarted(cfg.loadConfig());
