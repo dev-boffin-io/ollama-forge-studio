@@ -296,7 +296,9 @@ The model sees the list and loads one on demand with the `skill` tool. Example: 
 ## Web tools
 
 `webfetch` (URL -> markdown/text/html, 5 MB cap; localhost/LAN URLs always ask first) and `websearch`
-(DuckDuckGo with parallel variants, dedup, TTL cache, recency/site_type, published dates when available, retry/backoff, clear errors on parse failure; optional `autoFetchLimit` extracts short excerpts).
+(DuckDuckGo with parallel variants, dedup, TTL cache, recency/site_type, published dates when available, retry/backoff,
+clear errors on parse failure; the `html` endpoint falls back to `lite`, then to Exa/SearXNG per `config.websearch`;
+optional `autoFetchLimit` extracts short excerpts).
 
 ## Snapshots (shadow git) & parallel subagents
 

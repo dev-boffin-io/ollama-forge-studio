@@ -139,3 +139,24 @@ test('site_type docs/news applied without polluting recency mapping', async () =
     global.fetch = orig;
   }
 });
+
+test('ddg parser handles href before class and lite-style markup', () => {
+  const web2 = require('../lib/web');
+  const html = `
+    <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa&amp;rut=x" class="result__a">Alpha</a>
+    <a class="result__snippet" href="x">snip a</a>
+    <a rel="nofollow" href="https://example.com/b" class='result-link'>Beta</a>
+    <td class='result-snippet'>snip b</td>
+  `;
+  const items = web2.websearch._parseHtml(html, 10);
+  assert.equal(items.length, 2);
+  assert.equal(items[0].url, 'https://example.com/a');
+  assert.equal(items[0].snippet, 'snip a');
+  assert.equal(items[1].url, 'https://example.com/b');
+  assert.equal(items[1].snippet, 'snip b');
+});
+
+test('ddg bot-check page reports blocking, not a silent empty result', () => {
+  const web2 = require('../lib/web');
+  assert.throws(() => web2.websearch._parseHtml('<div class="anomaly-modal">x</div>', 5), /blocked/);
+});
