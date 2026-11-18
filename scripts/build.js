@@ -7,7 +7,7 @@
  *   node scripts/build.js            ->  dist/ollama-forge-studio[.exe]
  *
  * Steps: bundle server.js + lib/*.js into one CommonJS file (tiny built-in bundler, no deps),
- * embed public/* as SEA assets, generate the blob, copy the running `node` binary and inject the blob.
+ * embed public/* and the bundled examples/{agents,skills} as SEA assets (+ a manifest, see lib/bundled.js), generate the blob, copy the running `node` binary and inject the blob.
  * Needs Node >= 20.12 (22+ recommended). `postject` is fetched on demand via npx.
  * SEA cannot cross-compile: run this on each OS you want a binary for (see .github/workflows/release.yml).
  */
@@ -98,7 +98,35 @@ const assets = {};
     else assets['public/' + path.relative(path.join(ROOT, 'public'), f).split(path.sep).join('/')] = f;
   }
 })(path.join(ROOT, 'public'));
-console.log(`embedding ${Object.keys(assets).length} assets: ${Object.keys(assets).join(', ')}`);
+
+// Bundled defaults: examples/agents + examples/skills ship inside the binary (loaded below the user's own files).
+// SEA assets cannot be listed at runtime, so a manifest ({ hash, files: [{ path, exec }] }) is embedded next to them;
+// the hash changes with any file's name, mode or content and names the directory they are unpacked to.
+const EXAMPLES = path.join(ROOT, 'examples');
+const bundledFiles = [];
+for (const sub of ['agents', 'skills']) {
+  (function walk(dir) {
+    if (!fs.existsSync(dir)) return;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const f = path.join(dir, e.name);
+      if (e.isDirectory()) walk(f);
+      else if (e.isFile() && !['.DS_Store', 'Thumbs.db'].includes(e.name)) {
+        bundledFiles.push({ file: f, rel: path.relative(EXAMPLES, f).split(path.sep).join('/'), exec: (fs.statSync(f).mode & 0o111) !== 0 });
+      }
+    }
+  })(path.join(EXAMPLES, sub));
+}
+bundledFiles.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+const hash = require('node:crypto').createHash('sha256');
+for (const f of bundledFiles) {
+  hash.update(`${f.rel}\0${f.exec ? 1 : 0}\0`).update(fs.readFileSync(f.file)).update('\0');
+  assets['examples/' + f.rel] = f.file;
+}
+const manifestPath = path.join(DIST, 'examples-manifest.json');
+fs.writeFileSync(manifestPath, JSON.stringify({ hash: hash.digest('hex'), files: bundledFiles.map((f) => ({ path: f.rel, exec: f.exec })) }));
+assets['examples/manifest.json'] = manifestPath;
+
+console.log(`embedding ${Object.keys(assets).length} assets (${bundledFiles.length} bundled agent/skill files): ${Object.keys(assets).join(', ')}`);
 
 const seaConfig = path.join(DIST, 'sea-config.json');
 const blob = path.join(DIST, 'sea-prep.blob');
@@ -117,5 +145,5 @@ if (isMac) inject.push('--macho-segment-name', 'NODE_SEA');
 run('npx', inject);
 if (isMac) run('codesign', ['--sign', '-', OUT]);
 
-for (const f of [bundlePath, seaConfig, blob]) fs.rmSync(f, { force: true });
+for (const f of [bundlePath, seaConfig, blob, manifestPath]) fs.rmSync(f, { force: true });
 console.log(`\nbuilt ${path.relative(ROOT, OUT)}  (${(fs.statSync(OUT).size / 1048576).toFixed(0)} MB)`);

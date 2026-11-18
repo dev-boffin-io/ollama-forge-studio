@@ -145,6 +145,11 @@ syntax-coloured code blocks with a Copy button) by the dependency-free, XSS-safe
 Switch primary agents from the dropdown in the chat header. Primary agents can delegate to subagents with the
 `task` tool; every subagent run is stored as a child session (subagents cannot spawn subagents).
 
+**Bundled agents:** every `examples/agents/*.md` (`reviewer`, `debug-agent`, `security-agent`, …) ships with the app
+and is available out of the box — also inside the single-file executable. They are the *lowest* layer
+(bundled < global < project), so a file with the same name in your own folders replaces the bundled one.
+Set `OLLAMA_STUDIO_NO_BUNDLED=1` to switch the bundled agents *and* skills off.
+
 **Custom agents** are markdown files — `~/.studio/<project>/agents/<name>.md` (per project) or
 `~/.config/ollama-studio/agents/<name>.md` (global). See `examples/agents/reviewer.md`:
 
@@ -291,7 +296,13 @@ documentSymbol, workspaceSymbol, goToImplementation and diagnostics. `"lsp": fal
 
 Folders with a `SKILL.md` (`name`, `description` frontmatter) in `~/.studio/<project>/skills/`, `.claude/skills/`, `.agents/skills/`
 or the global equivalents (`~/.config/ollama-studio/skills`, `~/.claude/skills`, `~/.agents/skills`, `config.skills.paths`).
-The model sees the list and loads one on demand with the `skill` tool. Example: `examples/skills/commit-style/`.
+The model sees the list and loads one on demand with the `skill` tool.
+
+**Bundled skills:** every folder in `examples/skills/` (`commit-style`, `doc-generator`, `git-workflow`, `refactor-expert`,
+`test-and-verify`) is loaded by default and is overridden by a skill of the same `name` in any of the folders above.
+In the single-file executable they are embedded at build time (`npm run build`) and unpacked once to
+`~/.config/ollama-studio/bundled/<hash>/`, so a skill's `scripts/` and `reference/` files still have a real path.
+To ship another default agent or skill, drop it into `examples/agents/` or `examples/skills/` and rebuild.
 
 ## Web tools
 
@@ -419,6 +430,7 @@ lib/journal.js       undo / redo
 lib/commands.js      slash commands
 lib/sessions.js      persistent sessions (+ fork, export)
 lib/agents.js        built-in + markdown agents, system prompt, AGENTS.md
+lib/bundled.js       bundled layer: examples/{agents,skills} as defaults (source + single executable)
 lib/tools.js         tool schemas, permissions, bash
 lib/agent.js         agent loop, subagents, compaction
 lib/llm.js           provider layer (resolve, listing, context window)
