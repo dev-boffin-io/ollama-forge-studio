@@ -1,0 +1,92 @@
+{
+  "name": "ollama-forge-studio",
+  "displayName": "Ollama Forge Studio",
+  "description": "Chat with Ollama Forge Studio and send code selections from VS Code.",
+  "version": "0.1.0",
+  "publisher": "ollama-forge",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "ollama",
+    "ai",
+    "agent",
+    "chat",
+    "code"
+  ],
+  "activationEvents": [
+    "onCommand:ollamaStudio.openChat",
+    "onCommand:ollamaStudio.sendSelection",
+    "onCommand:ollamaStudio.startServer",
+    "onCommand:ollamaStudio.stopServer",
+    "onCommand:ollamaStudio.openSettings",
+    "onWebviewPanel:ollamaStudio.chat"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ollamaStudio.openChat",
+        "title": "Ollama Studio: Open Chat"
+      },
+      {
+        "command": "ollamaStudio.sendSelection",
+        "title": "Ollama Studio: Send Selection to Chat"
+      },
+      {
+        "command": "ollamaStudio.startServer",
+        "title": "Ollama Studio: Start Server"
+      },
+      {
+        "command": "ollamaStudio.stopServer",
+        "title": "Ollama Studio: Stop Server Started by Extension"
+      },
+      {
+        "command": "ollamaStudio.openSettings",
+        "title": "Ollama Studio: Open Settings"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "ollamaStudio.sendSelection",
+          "group": "navigation@90",
+          "when": "editorHasSelection"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Ollama Forge Studio",
+      "properties": {
+        "ollamaStudio.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4310",
+          "description": "URL of a running Ollama Forge Studio server."
+        },
+        "ollamaStudio.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the studio server automatically if it is not already running."
+        },
+        "ollamaStudio.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to server.js or the single-file ollama-forge-studio executable. Empty = the repository next to this extension."
+        },
+        "ollamaStudio.nodePath": {
+          "type": "string",
+          "default": "node",
+          "description": "Node.js executable used when serverPath points to server.js."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node ../test/vscode-protocol.test.js"
+  }
+}
