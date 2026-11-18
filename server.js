@@ -21,6 +21,8 @@ const ws = require('./lib/workspace');
 const sessions = require('./lib/sessions');
 const agents = require('./lib/agents');
 const autoMode = require('./lib/auto');
+const plugins = require('./lib/plugins');
+const sandbox = require('./lib/sandbox');
 const { runAgent, compactSession, generateTitle, resolveConfig, contextSize } = require('./lib/agent');
 const journal = require('./lib/journal');
 const commands = require('./lib/commands');
@@ -35,6 +37,7 @@ const { createWaker } = require('./lib/wake');
 let crashCount = 0;
 process.on('uncaughtException', (err) => { crashCount++; log.error('process', 'uncaught exception', err); if (crashCount > 50) process.exit(1); });
 process.on('unhandledRejection', (err) => { log.error('process', 'unhandled promise rejection', err instanceof Error ? err : new Error(String(err))); });
+process.on('exit', () => { try { plugins.unload(); } catch { /* shutting down */ } });
 
 /* ---------- CLI:  ollama-forge-studio [dir] [--port N] [--host H] [-c | --continue] [-s ID] [--agent NAME] ---------- */
 
@@ -156,6 +159,8 @@ async function handleApi(req, res, url) {
       skills: Object.values(skills.loadSkills(cfg.loadConfig())).map((x) => ({ name: x.name, description: x.description })),
       lsp: lsp.available(cfg.loadConfig()),
       terminal: cfg.loadConfig().terminal !== false,
+      plugins: plugins.status(),
+      sandbox: sandbox.status(cfg.loadConfig()),
     });
   }
 
@@ -164,13 +169,22 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const dir = cfg.setWorkDir(body.dir);
     mcp.stop(); lsp.stop(); procs.killAll();
+    await plugins.reload(cfg.loadConfig());
     pruneToolOutput();
     if (cfg.loadConfig().snapshots !== false) snapshot.warmUp().catch(log.swallow('snapshot', 'warm-up failed'));
     return sendJson(res, 200, { workDir: dir, latest: await sessions.latest() });
   }
 
   if (pathname === '/api/config' && method === 'GET') return sendJson(res, 200, llm.maskConfig(cfg.loadConfig()));
-  if (pathname === '/api/config' && (method === 'PUT' || method === 'POST')) return sendJson(res, 200, llm.maskConfig(cfg.saveConfig(await readBody(req))));
+  if (pathname === '/api/config' && (method === 'PUT' || method === 'POST')) {
+    const patch = await readBody(req);
+    const saved = cfg.saveConfig(patch);
+    if (patch && (patch.plugins !== undefined || patch.hooks !== undefined || patch.sandbox !== undefined)) {
+      await plugins.reload(saved);
+      sandbox.reset();
+    }
+    return sendJson(res, 200, llm.maskConfig(saved));
+  }
   // context usage badge: window of the model + tokens used by the session (0 for a new session)
   if (pathname === '/api/context' && method === 'GET') {
     const sid = url.searchParams.get('session');
@@ -203,7 +217,7 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/terminal' && method === 'POST') {
     if (cfg.loadConfig().terminal === false) return sendJson(res, 403, { error: 'the terminal is disabled in the config' });
     const b = await readBody(req);
-    return sendJson(res, 200, terminal.start(b.command));
+    return sendJson(res, 200, terminal.start(b.command, { config: cfg.loadConfig() }));
   }
   if (seg[1] === 'terminal' && seg.length === 3 && method === 'DELETE') return sendJson(res, 200, terminal.stop(seg[2]));
   if (seg[1] === 'terminal' && seg.length === 4 && seg[3] === 'stream' && method === 'GET') {
@@ -236,6 +250,10 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { servers: mcp.status() });
   }
   if (pathname === '/api/mcp/reload' && method === 'POST') return sendJson(res, 200, { servers: await mcp.reload(cfg.loadConfig()) });
+
+  if (pathname === '/api/plugins' && method === 'GET') return sendJson(res, 200, plugins.status());
+  if (pathname === '/api/plugins/reload' && method === 'POST') return sendJson(res, 200, await plugins.reload(cfg.loadConfig()));
+  if (pathname === '/api/sandbox' && method === 'GET') return sendJson(res, 200, sandbox.status(cfg.loadConfig()));
 
   if (pathname === '/api/agents' && method === 'GET') {
     return sendJson(res, 200, { agents: Object.values(agents.loadAgents()).map(agentInfo) });
@@ -427,6 +445,8 @@ async function handleApi(req, res, url) {
     running.get(b.sessionId)?.ac.abort();
     return sendJson(res, 200, { ok: true });
   }
+
+  if (await plugins.handleRoute(req, res, url, { sendJson, readBody, config: cfg.loadConfig() })) return;
 
   return sendJson(res, 404, { error: 'not found' });
 }
@@ -638,6 +658,7 @@ const startup = { sessionId: null, agent: args.agent || null };
   let workDir;
   try { workDir = cfg.setWorkDir(args.dir || process.cwd()); } catch (e) { console.error(`cannot open the directory: ${e.message}`); log.error('boot', 'setWorkDir failed', e); process.exit(1); }
   pruneToolOutput();
+  await plugins.load(cfg.loadConfig());
   if (args.session) startup.sessionId = args.session;
   else if (args.cont) { try { startup.sessionId = (await sessions.latest())?.id || null; } catch (e) { log.warn('boot', 'could not find the latest session to continue', e); } }
 

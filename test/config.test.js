@@ -67,3 +67,12 @@ test('loadConfig: defaults, global and local layers', () => {
   assert.equal(after.model, global.model !== undefined ? global.model : cfg.DEFAULT_CONFIG.model);
   assert.deepEqual(after.providers, {});
 });
+
+test('loadConfig: sandbox and plugins accept boolean layers', () => {
+  const file = path.join(ctx.studioDir, 'config.json');
+  fs.writeFileSync(file, JSON.stringify({ sandbox: true, plugins: false }), 'utf8');
+  const merged = cfg.loadConfig();
+  assert.equal(merged.sandbox.enabled, true);
+  assert.equal(merged.plugins.enabled, false);
+  fs.rmSync(file);
+});

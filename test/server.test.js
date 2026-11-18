@@ -71,3 +71,33 @@ test('GET session returns summarised-away messages as `history` so the chat can 
   assert.ok(got.history[1].content.length < 21000);
   assert.equal(got.messages.length, 2);
 });
+
+test('HTTP API exposes plugin status/routes and sandbox status', async (t) => {
+  const dir = path.join(ctx.dir, '.studio', 'plugins');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'smoke.js'), `
+    module.exports = {
+      name: 'smoke',
+      setup(api) {
+        api.registerRoute({ method: 'GET', path: '/api/plugins/smoke', handler: () => ({ ok: true, plugin: 'smoke' }) });
+      },
+    };
+  `, 'utf8');
+  const { child, port } = await startServer();
+  t.after(() => child.kill('SIGKILL'));
+  const base = `http://127.0.0.1:${port}`;
+
+  const status = await (await fetch(base + '/api/plugins')).json();
+  assert.equal(status.enabled, true);
+  assert.ok(status.plugins.some((p) => p.name === 'smoke'));
+  assert.ok(status.routes.some((r) => r.path === '/api/plugins/smoke'));
+
+  const route = await (await fetch(base + '/api/plugins/smoke')).json();
+  assert.deepEqual(route, { ok: true, plugin: 'smoke' });
+
+  const reload = await (await fetch(base + '/api/plugins/reload', { method: 'POST' })).json();
+  assert.equal(reload.enabled, true);
+
+  const sandbox = await (await fetch(base + '/api/sandbox')).json();
+  assert.equal(sandbox.enabled, false);
+});
