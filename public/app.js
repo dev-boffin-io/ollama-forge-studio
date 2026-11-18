@@ -803,6 +803,7 @@ async function consumeRun(res) {
       }
       case 'subagent':
         if (event.phase === 'start') addMessage('note', `◇ subagent "${event.agent}" ${event.resumed ? 'resumed' : 'started'}: ${event.description || ''}`).className = 'note';
+        else if (event.phase === 'queued') addMessage('note', `◇ subagent "${event.agent}" queued (${event.message})`).className = 'note';
         break;
       case 'todos': renderTodos(event.todos); break;
       case 'question': cards.set(event.id, addQuestionCard(event)); break;

@@ -276,6 +276,8 @@ Limits are generous by default: context auto-detect up to 131072 tokens, `read_f
 10000 lines (the rest saved to disk), `grep` 1000 matches, `glob` 5000 files, project tree 100k entries, files searched up to 10 MB,
 undo tracking up to 100 MB per file, uploads up to 500 MB, inline attachment text up to 50 % of the context, 200 agent steps per turn.
 Tune with `numCtx`, `autoCtxMax`, `maxIterations`, `maxUploadMB`, `attachInlineChars`, `toolOutput: {maxLines, maxBytes}`.
+
+Recursive subagents: `workflow: {maxDepth: 3, maxConcurrent: 20}` — subagents may delegate down to `maxDepth` levels (deeper calls get `Error: Maximum recursion depth (3) reached.`); at most `maxConcurrent` run at once, the rest queue. The `task_tree` tool shows the status of all subtasks.
 (A very large `numCtx` needs enough VRAM on your Ollama host.)
 
 ## Providers & models
@@ -497,7 +499,7 @@ walking up from the directory to the git root (first match wins), plus any files
 
 Layered: defaults < `config.json` (global) < `~/.studio/<project>/config.json` (per directory, optional).
 Keys: `endpoint`, `model`, `smallModel`, `providers`, `defaultProvider`, `agent`, `temperature`, `numCtx`, `autoCtxMax`,
-`maxIterations`, `requestTimeoutMs`, `autoCompact`, `wakeOnProcessExit`, `nudgePrompt`, `terminal`, `permission`, `instructions`, `mcp`, `lsp`, `websearch`, `skills`,
+`maxIterations`, `workflow`, `requestTimeoutMs`, `autoCompact`, `wakeOnProcessExit`, `nudgePrompt`, `terminal`, `permission`, `instructions`, `mcp`, `lsp`, `websearch`, `skills`,
 `hooks`, `plugins`, `sandbox`, `toolOutput`, `systemPrompt`.
 
 ## HTTP API
