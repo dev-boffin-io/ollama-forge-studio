@@ -220,6 +220,12 @@ function fillAgents(list, selected) {
   if (selected && list.some((a) => a.name === selected)) sel.value = selected;
 }
 
+/** Auto mode: show which agent is working right now inside the "auto" option ("auto · build"); null resets the label. */
+function setAutoActive(name) {
+  const o = [...$('agent').options].find((x) => x.value === 'auto');
+  if (o) o.textContent = name && name !== 'auto' ? `auto · ${name}` : 'auto';
+}
+
 /* ---------- sessions ---------- */
 
 async function loadSessions() {
@@ -286,6 +292,7 @@ async function openSession(id) {
   const s = await api(`/api/sessions/${id}`);
   state.sessionId = s.id;
   if (state.agents.some((a) => a.name === s.agent)) $('agent').value = s.agent;
+  setAutoActive(s.agent === 'auto' ? s.autoAgent : null);
   if (s.model) { const opt = [...$('model').options].find((o) => o.value === s.model); if (opt) $('model').value = s.model; }
   renderSession(s);
   pollJobs();
@@ -752,7 +759,8 @@ async function consumeRun(res) {
       case 'start':
         state.sessionId = event.sessionId;
         try { localStorage.setItem('lastSession:' + state.workDir, event.sessionId); } catch { /* ignore */ }
-        setStatus(`${event.agent} · generating…`, 'busy');
+        if (event.auto) setAutoActive(event.agent);
+        setStatus(`${event.auto ? 'auto → ' : ''}${event.agent} · generating…`, 'busy');
         break;
       case 'iteration': newTurnBlock(); break;
       case 'thinking':
@@ -817,7 +825,13 @@ async function consumeRun(res) {
         break;
       }
       case 'title': loadSessions(); break;
-      case 'agent': $('agent').value = event.name; addMessage('note', `◇ switched to the "${event.name}" agent`).className = 'note'; break;
+      case 'agent':
+        if (event.auto) {                      // auto mode: the dropdown stays on "auto", only its label follows the active agent
+          setAutoActive(event.name);
+          addMessage('note', `◇ auto: ${event.from ? `"${event.from}" → ` : ''}"${event.name}"${event.reason ? ` — ${event.reason}` : ''}`).className = 'note';
+          setStatus(`auto → ${event.name} · generating…`, 'busy');
+        } else { $('agent').value = event.name; addMessage('note', `◇ switched to the "${event.name}" agent`).className = 'note'; }
+        break;
       case 'retry':
         if (assistantEl) { assistantEl.remove(); newTurnBlock(); }
         addMessage('note', `server error — retry ${event.attempt}/${event.max} in ${(event.delayMs / 1000).toFixed(0)}s (${event.message})`).className = 'note';

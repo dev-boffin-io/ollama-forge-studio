@@ -139,6 +139,7 @@ syntax-coloured code blocks with a Copy button) by the dependency-free, XSS-safe
 |-----------|----------|-----------------------------------------------------|
 | `build`   | primary  | Full access (default)                               |
 | `plan`    | primary  | Read-only: analyse and produce a plan               |
+| `auto`    | primary  | Rotates between the primary agents ([below](#auto-mode)) |
 | `general` | subagent | Multi-step delegated work, own child session        |
 | `explore` | subagent | Read-only fast codebase search                      |
 
@@ -149,6 +150,26 @@ Switch primary agents from the dropdown in the chat header. Primary agents can d
 and is available out of the box — also inside the single-file executable. They are the *lowest* layer
 (bundled < global < project), so a file with the same name in your own folders replaces the bundled one.
 Set `OLLAMA_STUDIO_NO_BUNDLED=1` to switch the bundled agents *and* skills off.
+
+### Auto mode
+
+Pick **auto** in the agent dropdown and the studio moves the work between the primary agents step by step
+(`build`, `plan` and every custom agent with `mode: primary` or `all`):
+
+1. **Per message** — a quick router call (`smallModel` if set, otherwise the chat model) chooses the agent that fits
+   your new message. It prefers the agent that was working before and keeps it whenever the answer is unusable.
+2. **During a turn** — the active agent can hand over by itself with the `switch_agent` tool (e.g. finished code →
+   a review agent, a failing test run → a debugging agent). The loop then continues as the new agent: its prompt,
+   model, tools and permissions.
+3. **Subagents still work** — whoever is active keeps the `task` tool and can delegate to `general`, `explore` and
+   any `mode: subagent` / `mode: all` agent.
+
+The dropdown stays on `auto` and shows who is working (`auto · fixer`); every hand-over appears as a note in the chat.
+`plan` never hands over silently: leaving it still goes through `plan_exit` and your approval. Not every agent belongs in
+the rotation — add `auto: false` to its frontmatter to keep it out (it can still be picked by hand). `auto` is a reserved
+name. Set `"autoRoute": false` in the config to skip the per-message router call (agents then only change via
+`switch_agent`). Note that a hand-over can move the work to an agent with wider permissions than the previous one
+(the permission rules of each agent apply as soon as it takes over).
 
 **Custom agents** are markdown files — `~/.studio/<project>/agents/<name>.md` (per project) or
 `~/.config/ollama-studio/agents/<name>.md` (global). See `examples/agents/reviewer.md`:
@@ -431,6 +452,7 @@ lib/commands.js      slash commands
 lib/sessions.js      persistent sessions (+ fork, export)
 lib/agents.js        built-in + markdown agents, system prompt, AGENTS.md
 lib/bundled.js       bundled layer: examples/{agents,skills} as defaults (source + single executable)
+lib/auto.js          auto mode: per-message router (agent hand-over lives in lib/tools.js + lib/agent.js)
 lib/tools.js         tool schemas, permissions, bash
 lib/agent.js         agent loop, subagents, compaction
 lib/llm.js           provider layer (resolve, listing, context window)

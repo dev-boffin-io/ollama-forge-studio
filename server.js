@@ -20,6 +20,7 @@ const terminal = require('./lib/terminal');
 const ws = require('./lib/workspace');
 const sessions = require('./lib/sessions');
 const agents = require('./lib/agents');
+const autoMode = require('./lib/auto');
 const { runAgent, compactSession, generateTitle, resolveConfig, contextSize } = require('./lib/agent');
 const journal = require('./lib/journal');
 const commands = require('./lib/commands');
@@ -482,7 +483,7 @@ async function handleChat(req, res) {
   if (body.model) session.model = body.model;
   const model = session.model || config.model;
   if (!model) return sendJson(res, 400, { error: 'no model selected' });
-  let agent = agents.getAgent(session.agent) || agents.getAgent('build');
+  let agent = agents.resolve(session) || agents.getAgent('build');     // "auto" runs as the agent it picked last (re-picked below)
   if (agent.mode === 'subagent') return sendJson(res, 400, { error: `"${agent.name}" is a subagent; pick a primary agent` });
 
   waker.onUserMessage(session.id);
@@ -521,12 +522,20 @@ function launchRun({ session, config, agent, model, text, att, res, wake = false
     try {
       if (!session.title) { session.title = (text || (att[0] && att[0].name) || 'attachment').replace(/\s+/g, ' ').slice(0, 60); session.autoTitle = !!text; }
       let content = text;
+      let commandPickedAgent = false;
       let display = wake ? wakeDisplay : undefined;
       let attachments;
       const exp = text && !wake ? await commands.expand(text) : null;
       if (exp) {
         content = exp.text; display = text;
-        if (exp.command.agent) { const ag = agents.getAgent(exp.command.agent); if (ag && ag.mode !== 'subagent') { session.agent = ag.name; agent = ag; } }
+        if (exp.command.agent) {
+          const ag = agents.getAgent(exp.command.agent);
+          if (ag && ag.mode !== 'subagent' && !ag.virtual) {
+            if (agents.isAuto(session.agent)) session.autoAgent = ag.name;   // stay in auto mode; the command just picks this turn's agent
+            else session.agent = ag.name;
+            agent = ag; commandPickedAgent = true;
+          }
+        }
       }
       if (att.length) {
         emit({ type: 'info', text: `📎 reading ${att.length} attachment${att.length > 1 ? 's' : ''}…` });
@@ -540,7 +549,12 @@ function launchRun({ session, config, agent, model, text, att, res, wake = false
       session.messages.push({ role: 'user', content, turn: session.turn, ...(wake ? { notice: true } : {}), ...(display !== undefined ? { display } : {}), ...(attachments ? { attachments } : {}) });
       await sessions.save(session);
       run.base = session.messages.slice();     // shallow copy is enough (and instant): messages are replaced, not mutated, for the replay
-      emit({ type: 'start', sessionId: session.id, title: session.title, agent: agent.name, model, workDir: cfg.getWorkDir() });
+      // auto mode: choose the agent for this message (a wake-up turn or a command with its own agent keeps the current one)
+      const auto = agents.isAuto(session.agent);
+      const before = agent.name;
+      if (auto && !wake && !commandPickedAgent) agent = await autoMode.route({ session, text: content, config, model, signal: run.ac.signal });
+      emit({ type: 'start', sessionId: session.id, title: session.title, agent: agent.name, auto, model, workDir: cfg.getWorkDir() });
+      if (auto && agent.name !== before) emit({ type: 'agent', name: agent.name, auto: true, from: before, reason: '' });
       session.snaps = session.snaps || {};
       const snapOn = config.snapshots !== false;
       const snapOpts = { timeoutSec: Number(config.snapshotTimeoutSec) || 25 };
@@ -583,7 +597,7 @@ async function startWakeRun(sessionId, notice) {
   if (running.has(sessionId)) return false;           // a user message won the race while the session was loading
   const model = session.model || config.model;
   if (!model) throw new Error('no model selected');
-  const agent = agents.getAgent(session.agent) || agents.getAgent('build');
+  const agent = agents.resolve(session) || agents.getAgent('build');
   if (!agent || agent.mode === 'subagent') throw new Error('no primary agent for this session');
   launchRun({ session, config, agent, model, text: notice.text, att: [], res: null, wake: true, wakeDisplay: notice.display });
   return true;

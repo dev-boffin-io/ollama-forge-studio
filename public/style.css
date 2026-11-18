@@ -185,6 +185,7 @@ select { min-width: 200px; }
 .list li .meta { font-size: 11px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
 .agent-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--accent); }
 .agent-badge.plan { color: var(--amber); }
+.agent-badge.auto { color: var(--green); }
 .chat .pane-head select { min-width: 0; padding: 3px 6px; font-size: 12px; }
 .todos { padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12px; max-height: 140px; overflow: auto; }
 .todos div { padding: 1px 0; color: var(--muted); }
