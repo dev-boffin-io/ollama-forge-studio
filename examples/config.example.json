@@ -13,10 +13,21 @@
   },
   "lsp": { "typescript": { "disabled": false } },
   "websearch": { "provider": "exa" },
+  "hooks": {},
+  "plugins": { "enabled": true, "paths": [] },
+  "sandbox": {
+    "enabled": false,
+    "image": "node:20-bookworm",
+    "network": "none",
+    "memory": "1g",
+    "cpus": "1",
+    "mount": "rw"
+  },
   "permission": {
     "edit": "allow",
     "bash": { "*": "ask", "npm test*": "allow", "git status*": "allow", "rm *": "deny" },
     "mcp": { "*": "ask", "filesystem_read*": "allow" },
+    "plugin": { "*": "ask" },
     "webfetch": "allow"
   }
 }

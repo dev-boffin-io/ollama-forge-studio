@@ -19,8 +19,8 @@ Nothing is written into your project. All studio data lives in your home directo
 └─ <project-name>-<hash>/        one folder per project directory (name + short hash of its full path)
    ├─ project.json               which directory this folder belongs to
    ├─ sessions/                  conversations (kept separate per project)
-   ├─ uploads/  tool-output/  plans/  agents/  skills/  commands/
-   ├─ snapshot.git/  recall.db  config.json
+   ├─ uploads/  tool-output/  plans/  agents/  skills/  commands/  plugins/
+   ├─ backups/  snapshot.git/  recall.db  config.json
 ```
 
 Set `OLLAMA_STUDIO_HOME` to use another root. Inside tool paths the agent still sees this folder as `.studio/…`
@@ -69,9 +69,10 @@ npm test        # Node's built-in test runner (zero dependencies): unit tests + 
 
 Covers the permission rule engine, fuzzy `edit_file` matching, path-safe workspace ops (incl. symlink escapes),
 config layering, sessions (fork / archive / export), provider resolution and key masking, the XSS-safe markdown
-renderer, attachment classification, skills, tool visibility per agent, and an end-to-end HTTP API check against a
-live `server.js`. Every test file runs in its own process with a throwaway `OLLAMA_STUDIO_HOME` — nothing in your
-real `~/.studio/` or `config.json` is touched.
+renderer, attachment classification, skills, tool visibility per agent, lifecycle hooks, plugin loading/tools/routes,
+Docker sandbox argument construction and fail-closed behavior, the VS Code SSE client, and an end-to-end HTTP API check
+against a live `server.js`. Sandbox tests do not need a Docker daemon. Every test file runs in its own process with a
+throwaway `OLLAMA_STUDIO_HOME` — nothing in your real `~/.studio/` or `config.json` is touched.
 
 ## Attachments (any file type)
 
@@ -204,7 +205,7 @@ or crash never loses work. Reopen the studio in the same directory and the sessi
 
 `list_files`, `glob` (truncated results signal), `grep` (truncated results signal), `read_file` (line numbers, 5000-line / size cap, binary detection, "did you mean", array of paths), `move_file`, `write_file`, `edit_file` (dry_run), `multi_edit`, `json_edit`, `delete_file`, `bash`, `todo_write`, `task` (subagents, resumable with `task_id`),
 `question` (ask you a question, with options), `plan_exit` (plan agent only), `webfetch`, `websearch`, `skill`, `lsp`,
-and any MCP tools.
+any MCP tools, and plugin tools (`<plugin>_<tool>`). Plugin and MCP tools ask for permission by default.
 
 - **Fuzzy `edit_file`**: tolerates wrong indentation/whitespace, copied `12:` line-number prefixes and
   small drift in the middle of a block (anchor lines + similarity), with `replace_all` and a "matched span too big" guard.
@@ -221,7 +222,8 @@ A flat rule list, **last matching rule wins**. In `config.json`, `~/.studio/<pro
   "edit": "allow",
   "bash": { "*": "ask", "git status*": "allow", "npm test*": "allow", "rm *": "deny" },
   "read": { "*.env": "ask" },
-  "task": { "general": "deny" }
+  "task": { "general": "deny" },
+  "plugin": { "*": "ask" }
 }
 ```
 
@@ -305,6 +307,100 @@ are never sent back to the browser (masked). `smallModel` is used for titles and
 `config.mcp` (see `examples/config.example.json`): `local` (stdio command) or `remote` (Streamable HTTP + headers).
 Their tools appear as `<server>_<tool>` and **ask permission by default** (`"mcp": {"github_*": "allow"}` to relax).
 **Tools → Reload MCP** in the UI reconnects. OAuth-protected remote servers are not supported (use a header token).
+
+## Plugins
+
+Plugins add tools, lifecycle hooks and HTTP routes without changing the core. They are loaded from the global
+`plugins/` folder, the project's `.studio/plugins/`, `.claude/plugins/` or `.agents/plugins/`, the project data folder,
+and `config.plugins.paths`. Disable all of them with `"plugins": { "enabled": false }`.
+
+A plugin is a CommonJS file, a folder with `index.js` / `plugin.js`, or a folder with `plugin.json` (optionally with a
+`main` entry). Plugin tools are always namespaced, so a `docker` plugin with a `ps` tool becomes `docker_ps`:
+
+```js
+module.exports = {
+  name: 'hello',
+  setup(api) {
+    api.registerTool({
+      name: 'greet',
+      description: 'Greet someone',
+      parameters: { type: 'object', properties: { who: { type: 'string' } } },
+      handler: async ({ who }) => ({ output: `hello ${who || 'world'}` }),
+    });
+    api.registerHook('on_tool_call', (event) => ({ allow: event.tool !== 'bash' }));
+    api.registerRoute({ method: 'GET', path: '/api/plugins/hello', handler: () => ({ ok: true }) });
+  },
+};
+```
+
+JSON plugins can contribute command tools without any JavaScript:
+
+```json
+{ "name": "hello", "tools": { "greet": { "description": "Greet", "command": ["node", "greet.js"] } } }
+```
+
+Command tools receive `{ "args": {...}, "workDir": "...", "studioDir": "...", "sessionId": "..." }` as JSON on stdin
+and may print JSON. Plugin tools use the `plugin` permission category and **ask by default**; add
+`"plugin": { "hello_*": "allow" }` to relax it. Plugin routes must start with `/api/plugins/`. Use
+`GET /api/plugins` to inspect loaded plugins or `POST /api/plugins/reload` after changing one. Plugins are trusted
+code: only install plugins you would run directly.
+
+## Lifecycle hooks
+
+Hooks run at agent and tool boundaries. Configure them in `config.json` or register them from a plugin:
+
+```json
+"hooks": {
+  "pre_edit": [{ "backup": true }],
+  "on_tool_call": [{ "command": ["node", "hooks/audit.js"], "timeout": 10000 }],
+  "on_file_change": [{ "command": ["node", "hooks/log-change.js"] }]
+}
+```
+
+Events: `on_agent_start`, `on_agent_end`, `on_tool_call`, `on_tool_result`, `pre_edit`, `on_file_change`, `on_error`.
+`pre_edit` and `on_tool_call` are blocking by default; set `"blocking": false` to observe only. The other events are
+observe-only. A hook may be a command, a JS function (plugins), or `{ "backup": true }`. Command hooks receive the event payload as JSON on stdin and in
+`OLLAMA_STUDIO_HOOK_PAYLOAD`, with `OLLAMA_STUDIO_HOOK`, `OLLAMA_STUDIO_WORKDIR` and `OLLAMA_STUDIO_SESSION` set. Print
+`{ "allow": false, "message": "why" }` to block a blocking event. `{ "backup": true }` copies the old file or folder to
+`~/.studio/<project>/backups/<timestamp>/` before an edit. Hook failures are logged; a blocking hook failure stops the
+tool (fail closed). Use `"*"` as the event key to run a hook for every event.
+
+## Docker sandbox
+
+Set `sandbox.enabled` to run agent shell commands (and the user terminal) inside a fresh Docker container. The project
+is mounted at `/workspace` and the studio data folder at `/workspace/.studio`:
+
+```json
+"sandbox": {
+  "enabled": true,
+  "image": "node:20-bookworm",
+  "network": "none",
+  "memory": "1g",
+  "cpus": "1",
+  "mount": "rw"
+}
+```
+
+Use `"mount": "ro"` for a read-only project, `"network": "bridge"` when the agent must install packages, and
+`"extraArgs"` for additional `docker run` flags. `user`, `env`, `pidsLimit`, `init`, `noNewPrivileges`,
+`readOnlyRootfs`, `mountStudio` and `docker` (the binary) are also configurable. Sandboxing is **fail closed**: if
+Docker or its daemon is unavailable, commands fail instead of silently running on the host. Check availability with
+`GET /api/sandbox`. Docker is not bundled with the studio. The sandbox covers agent `bash` and terminal commands;
+hooks and plugin tools run in the studio process (plugins are trusted code).
+
+## VS Code extension
+
+The dependency-free extension in `vscode-extension/` (VS Code 1.82+, which includes `fetch`/Web Streams) chats with the
+running studio over its REST/SSE API, so agent runs, tools, permissions, hooks, plugins and the sandbox behave exactly
+as in the browser. It has no build step:
+
+1. Open the repository in VS Code and press `F5` (Run Extension), then run **Ollama Studio: Open Chat**.
+2. Or symlink `vscode-extension/` into `~/.vscode/extensions/` and reload VS Code.
+
+Commands: **Open Chat**, **Send Selection to Chat** (also in the editor context menu), **Start Server**, **Stop Server
+Started by Extension**, **Open Settings**. If no studio answers, it starts `server.js` automatically and stops only the
+server it started. Settings: `ollamaStudio.serverUrl` (default `http://127.0.0.1:4310`), `autoStart`, `serverPath` and
+`nodePath`. See `vscode-extension/README.md` for details.
 
 ## LSP
 
@@ -402,18 +498,20 @@ walking up from the directory to the git root (first match wins), plus any files
 Layered: defaults < `config.json` (global) < `~/.studio/<project>/config.json` (per directory, optional).
 Keys: `endpoint`, `model`, `smallModel`, `providers`, `defaultProvider`, `agent`, `temperature`, `numCtx`, `autoCtxMax`,
 `maxIterations`, `requestTimeoutMs`, `autoCompact`, `wakeOnProcessExit`, `nudgePrompt`, `terminal`, `permission`, `instructions`, `mcp`, `lsp`, `websearch`, `skills`,
-`toolOutput`, `systemPrompt`.
+`hooks`, `plugins`, `sandbox`, `toolOutput`, `systemPrompt`.
 
 ## HTTP API
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/state` | workDir, startup session, agents |
+| GET | `/api/state` | workDir, startup session, agents, plugins, sandbox |
 | POST | `/api/workdir` `{dir}` | change directory |
 | GET/PUT | `/api/config` | config |
 | GET | `/api/models` | models of all providers |
 | POST | `/api/providers/test` | test a provider (type, endpoint, apiKey) |
 | GET | `/api/mcp`, POST `/api/mcp/reload` | MCP status / reconnect |
+| GET | `/api/plugins`, POST `/api/plugins/reload` | plugin status / reload |
+| GET | `/api/sandbox` | Docker sandbox status / availability |
 | GET | `/api/agents` | all agents |
 | GET/POST | `/api/sessions` | list / create |
 | GET/PUT/DELETE | `/api/sessions/:id` | read / rename+switch agent / delete (with children) |
@@ -453,8 +551,11 @@ lib/sessions.js      persistent sessions (+ fork, export)
 lib/agents.js        built-in + markdown agents, system prompt, AGENTS.md
 lib/bundled.js       bundled layer: examples/{agents,skills} as defaults (source + single executable)
 lib/auto.js          auto mode: per-message router (agent hand-over lives in lib/tools.js + lib/agent.js)
-lib/tools.js         tool schemas, permissions, bash
-lib/agent.js         agent loop, subagents, compaction
+lib/tools.js         tool schemas, permissions, bash, plugin tool dispatch, hook calls
+lib/agent.js         agent loop, subagents, compaction, lifecycle hooks
+lib/hooks.js         lifecycle hook registry, command/JS hooks, blocking, backups
+lib/plugins.js       external plugin loader: tools, hooks, HTTP routes
+lib/sandbox.js       Docker sandbox command construction, availability, cleanup
 lib/llm.js           provider layer (resolve, listing, context window)
 lib/ollama.js        streaming Ollama client
 lib/openai.js        OpenAI-compatible streaming client
@@ -469,5 +570,6 @@ lib/terminal.js      user terminal: run a shell command in the workdir, stream o
 lib/wake.js          wakes the agent when a background process finishes
 lib/serve-file.js    file downloads: Content-Length, Range/resume, build-output guard
 public/              UI
+vscode-extension/    dependency-free VS Code chat client (REST/SSE, no build step)
 test/                unit + smoke tests (`npm test`, node --test)
 ```
