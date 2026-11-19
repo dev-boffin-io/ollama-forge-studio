@@ -423,3 +423,72 @@ select { min-width: 200px; }
 .job-last { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 body.jobs-running .tree-dl[data-build] { opacity: .3; pointer-events: none; }   /* build output is still being written */
 #prompt:disabled { opacity: .6; cursor: not-allowed; }
+
+/* ---- tabs: Chat / Fleet / Memory ---- */
+.tabs { display: flex; align-items: center; gap: 2px; padding: 6px 10px 0; background: var(--bg-2); border-bottom: 1px solid var(--border); }
+.tab { background: transparent; color: var(--muted); border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; padding: 6px 14px; cursor: pointer; font-weight: 600; font-size: 12px; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); background: var(--bg); border-color: var(--border); }
+.tab-badge { display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 4px; border-radius: 8px; background: var(--amber); color: #1b1300; font-size: 10px; text-align: center; }
+.tabs .spacer { flex: 1; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin: 0 6px 8px; }
+.live-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.chat[data-tab="fleet"] > :not(.tabs):not(#fleetView),
+.chat[data-tab="memory"] > :not(.tabs):not(#memoryView) { display: none !important; }
+.tabview { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; background: var(--bg); }
+.tabview[hidden] { display: none !important; }
+.tabview h4 { margin: 16px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.tabview .err { color: var(--red); font-size: 12px; margin: 6px 0; }
+.tabview .empty { color: var(--muted); padding: 14px; border: 1px dashed var(--border); border-radius: 8px; font-size: 13px; }
+.tabview .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tabview input[type="text"], .tabview input[type="search"] { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; min-width: 0; }
+.tabview textarea { width: 100%; resize: vertical; }
+
+/* fleet */
+.fl-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.chip { font-size: 11px; padding: 2px 9px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--border); color: var(--muted); }
+.chip b { color: var(--text); }
+.chip.run b { color: var(--amber); } .chip.ok b { color: var(--green); } .chip.bad b { color: var(--red); }
+.fl-dispatch { display: grid; gap: 6px; margin: 8px 0; padding: 10px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; }
+.fl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.fl-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fl-card.running { border-color: var(--amber); }
+.fl-card.waiting { border-color: var(--red); }
+.fl-card.done { border-color: #2a6b3a; }
+.fl-card.failed { border-color: var(--red); }
+.fl-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.fl-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill { font-size: 10px; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--border); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.pill.running { color: var(--amber); border-color: var(--amber); } .pill.done { color: var(--green); border-color: var(--green); }
+.pill.failed, .pill.waiting { color: var(--red); border-color: var(--red); } .pill.queued { color: var(--accent); border-color: var(--accent); }
+.fl-task, .fl-meta { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.fl-card details pre { margin: 6px 0 0; max-height: 200px; overflow: auto; white-space: pre-wrap; font-size: 12px; background: var(--bg); padding: 8px; border-radius: 6px; }
+.fl-card .row { margin-top: auto; }
+.fl-link { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; margin: 4px 0; font-size: 12px; background: var(--bg-2); }
+.fl-timeline { max-height: 190px; overflow-y: auto; font: 11px var(--mono); color: var(--muted); background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+.fl-timeline div { padding: 1px 0; }
+.fl-timeline .t-fail { color: var(--red); } .fl-timeline .t-ok { color: var(--green); }
+
+/* memory */
+.mm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
+.mm-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; min-width: 0; }
+.mm-card h3 { margin: 0 0 8px; font-size: 13px; }
+.mm-line { font-size: 12px; color: var(--muted); margin: 3px 0; overflow-wrap: anywhere; }
+.mm-line b { color: var(--text); }
+.bar { height: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 5px; overflow: hidden; margin: 6px 0; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+.bar.warn i { background: var(--amber); } .bar.crit i { background: var(--red); }
+.mm-search { display: flex; gap: 6px; margin: 14px 0 6px; flex-wrap: wrap; }
+.mm-search input { flex: 1 1 200px; }
+.mm-hit { border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin: 6px 0; background: var(--bg-2); }
+.mm-hit .mm-meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.mm-hit pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 160px; overflow: auto; }
+.mm-hit a { color: var(--accent); cursor: pointer; }
+.via { padding: 0 6px; border-radius: 8px; border: 1px solid var(--border); font-size: 10px; text-transform: uppercase; }
+.via-vector { color: #b392f0; border-color: #b392f0; } .via-both { color: var(--green); border-color: var(--green); } .via-bm25 { color: var(--accent); border-color: var(--accent); }
+
+@media (max-width: 900px) {
+  .tab { padding: 6px 10px; }
+  .tabview { padding: 8px; }
+  .fl-grid { grid-template-columns: 1fr; }
+}

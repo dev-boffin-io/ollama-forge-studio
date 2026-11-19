@@ -60,6 +60,13 @@
     </div>
 
     <section class="pane chat">
+      <nav class="tabs" role="tablist" aria-label="Studio views">
+        <button class="tab active" role="tab" type="button" data-tab="chat" aria-selected="true">Chat</button>
+        <button class="tab" role="tab" type="button" data-tab="fleet" aria-selected="false">Fleet <span id="fleetBadge" class="tab-badge" hidden></span></button>
+        <button class="tab" role="tab" type="button" data-tab="memory" aria-selected="false">Memory</button>
+        <span class="spacer"></span>
+        <span id="liveDot" class="live-dot" title="Live event stream" aria-hidden="true"></span>
+      </nav>
       <div class="pane-head">
         <div class="row">
           <h2>Agent</h2>
@@ -105,6 +112,8 @@
           <button id="terminalRun" class="btn small primary" type="submit">Run</button>
         </form>
       </div>
+      <div id="fleetView" class="tabview" role="tabpanel" hidden></div>
+      <div id="memoryView" class="tabview" role="tabpanel" hidden></div>
     </section>
   </main>
 
@@ -192,5 +201,6 @@
 
   <script src="/markdown.js"></script>
   <script src="/app.js"></script>
+  <script src="/panels.js"></script>
 </body>
 </html>
