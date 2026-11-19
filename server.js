@@ -32,6 +32,9 @@ const log = require('./lib/log');
 const { statusFor, explain } = require('./lib/errors');
 const { serveFile, downloadBlockedReason } = require('./lib/serve-file');
 const { createWaker } = require('./lib/wake');
+const recall = require('./lib/recall');
+const { bus, TYPES } = require('./lib/events');
+const { FleetManager } = require('./lib/agents');
 
 // A bug in one request/tool must never take the whole studio (and a running agent) down: log it and keep serving.
 let crashCount = 0;
@@ -168,6 +171,7 @@ async function handleApi(req, res, url) {
     if (running.size) throw new Error('stop running agents before changing directory');
     const body = await readBody(req);
     const dir = cfg.setWorkDir(body.dir);
+    fleet.reset();
     mcp.stop(); lsp.stop(); procs.killAll();
     await plugins.reload(cfg.loadConfig());
     pruneToolOutput();
@@ -183,6 +187,8 @@ async function handleApi(req, res, url) {
       await plugins.reload(saved);
       sandbox.reset();
     }
+    recall.configure(saved);
+    fleet.configure({ maxParallel: (saved.fleet || {}).maxParallel, maxChain: (saved.fleet || {}).maxChain });
     return sendJson(res, 200, llm.maskConfig(saved));
   }
   // context usage badge: window of the model + tokens used by the session (0 for a new session)
@@ -446,6 +452,8 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
+  if (pathname.startsWith('/api/fleet/') || pathname.startsWith('/api/memory/') || pathname === '/api/events') { if (await handleDashboardApi(req, res, url)) return; }
+
   if (await plugins.handleRoute(req, res, url, { sendJson, readBody, config: cfg.loadConfig() })) return;
 
   return sendJson(res, 404, { error: 'not found' });
@@ -537,6 +545,9 @@ function launchRun({ session, config, agent, model, text, att, res, wake = false
   });
   const heartbeat = setInterval(() => { for (const r of run.subs) { try { if (!r.writableEnded) r.write(': keepalive\n\n'); } catch (e) { log.debug('server', 'keepalive failed', e); } } }, 15000);
 
+  // How this run ended — announced on the event bus once the run is fully over (see `finally`), so listeners (fleets) can start the next one.
+  const lifecycle = { outcome: 'done', agent: agent.name, final: '', iterations: 0, truncated: false, error: '' };
+
   // The run continues even if every client disconnects.
   (async () => {
     try {
@@ -574,6 +585,8 @@ function launchRun({ session, config, agent, model, text, att, res, wake = false
       const before = agent.name;
       if (auto && !wake && !commandPickedAgent) agent = await autoMode.route({ session, text: content, config, model, signal: run.ac.signal });
       emit({ type: 'start', sessionId: session.id, title: session.title, agent: agent.name, auto, model, workDir: cfg.getWorkDir() });
+      lifecycle.agent = agent.name;
+      bus.emit(TYPES.AGENT_STARTED, { sessionId: session.id, agent: agent.name, model, isChild: false });
       if (auto && agent.name !== before) emit({ type: 'agent', name: agent.name, auto: true, from: before, reason: '' });
       session.snaps = session.snaps || {};
       const snapOn = config.snapshots !== false;
@@ -591,10 +604,11 @@ function launchRun({ session, config, agent, model, text, att, res, wake = false
         if (t) { session.title = t; emit({ type: 'title', title: t }); }
         session.autoTitle = false;
       }
+      lifecycle.final = result.final ? String(result.final) : ''; lifecycle.iterations = result.iterations; lifecycle.truncated = !!result.truncated;
       emit({ type: 'done', iterations: result.iterations, truncated: !!result.truncated, usage: session.usage || null });
     } catch (err) {
-      if (run.ac.signal.aborted) { session.interrupted = true; emit({ type: 'aborted' }); }
-      else emit({ type: 'error', message: String(err && err.message ? err.message : err) });
+      if (run.ac.signal.aborted) { lifecycle.outcome = 'aborted'; session.interrupted = true; emit({ type: 'aborted' }); }
+      else { lifecycle.outcome = 'failed'; lifecycle.error = String(err && err.message ? err.message : err); emit({ type: 'error', message: lifecycle.error }); }
     } finally {
       clearInterval(heartbeat);
       for (const id of myPermissions) pendingPermissions.delete(id);
@@ -603,8 +617,13 @@ function launchRun({ session, config, agent, model, text, att, res, wake = false
       running.delete(session.id);
       for (const r of run.subs) if (!r.writableEnded) r.end();
       waker.onRunEnd(session.id);   // a background process may have finished while this run was busy
+      const base = { sessionId: session.id, agent: lifecycle.agent, isChild: false };
+      if (lifecycle.outcome === 'done') bus.emit(TYPES.AGENT_FINISHED, { ...base, ok: true, final: lifecycle.final.slice(0, 4000), iterations: lifecycle.iterations, truncated: lifecycle.truncated });
+      else if (lifecycle.outcome === 'aborted') bus.emit(TYPES.AGENT_ABORTED, base);
+      else bus.emit(TYPES.AGENT_FAILED, { ...base, error: lifecycle.error.slice(0, 300) });
     }
   })();
+  return run;
 }
 
 /* ---------- wake-up when a background process finishes ---------- */
@@ -630,6 +649,163 @@ const waker = createWaker({
   enabled: () => cfg.loadConfig().wakeOnProcessExit !== false,
   start: startWakeRun,
 });
+
+/* ---------- fleets (groups of agents) + dashboard API: lib/fleet.js, lib/events.js, lib/recall.js ---------- */
+
+const fleet = new FleetManager({ file: () => path.join(cfg.studioDir(), 'fleets.json') }).attach();
+
+const isWaiting = (sid) => { for (const p of pendingPermissions.values()) if (p.sessionId === sid) return true; for (const q of pendingQuestions.values()) if (q.sessionId === sid) return true; return false; };
+
+/** Start one fleet task as a normal run on the member's session (no browser attached; the Fleet tab or /attach can watch it). */
+async function startFleetRun(sessionId, text) {
+  if (running.has(sessionId)) return false;
+  const config = cfg.loadConfig();
+  const session = await sessions.get(sessionId);
+  if (running.has(sessionId)) return false;
+  const model = session.model || config.model;
+  if (!model) throw new Error('no model selected — pick a model in the top bar first');
+  const agent = agents.resolve(session) || agents.getAgent('build');
+  if (!agent || agent.mode === 'subagent') throw new Error('no primary agent for this session');
+  waker.onUserMessage(session.id);
+  launchRun({ session, config, agent, model, text, att: [], res: null, wake: false });
+  return true;
+}
+
+async function createFleetSession({ agent, model, title }) {
+  const config = cfg.loadConfig();
+  const a = agents.getAgent(agent || config.agent);
+  if (!a || a.mode === 'subagent') { const e = new Error(`"${agent}" is not a primary agent`); e.status = 400; throw e; }
+  return sessions.create({ agent: a.name, model: model || config.model, title: title || `${a.name} (fleet)` });
+}
+
+{
+  const c0 = cfg.loadConfig().fleet || {};
+  fleet.configure({ start: startFleetRun, createSession: createFleetSession, isRunning: (id) => running.has(id), isWaiting, maxParallel: c0.maxParallel, maxChain: c0.maxChain });
+}
+
+/** Fleet status joined with live session data (title, message count, running flag). */
+async function fleetStatus() {
+  const st = fleet.status();
+  const rows = new Map((await sessions.list({ includeChildren: true })).map((r) => [r.id, r]));
+  for (const f of st.fleets) for (const m of f.members) {
+    const r = rows.get(m.sessionId);
+    m.title = (r && r.title) || m.title; m.messageCount = r ? r.messageCount : 0; m.live = running.has(m.sessionId); m.missing = !r;
+    if (r && r.model) m.model = r.model;
+  }
+  return st;
+}
+
+const wantFleet = (b) => { if (!b.fleetId) { const e = new Error('fleetId is required'); e.status = 400; throw e; } return b.fleetId; };
+
+/** /api/events (live SSE), /api/fleet/*, /api/memory/*. Returns true when the request was handled. */
+async function handleDashboardApi(req, res, url) {
+  const { pathname } = url;
+  const method = req.method;
+
+  if (pathname === '/api/events' && method === 'GET') {
+    const types = (url.searchParams.get('types') || '').split(',').filter(Boolean);
+    const last = Number(req.headers['last-event-id'] || url.searchParams.get('since') || 0) || 0;
+    res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    const send = (ev) => { try { if (!res.writableEnded && !res.destroyed) res.write(`id: ${ev.seq}\ndata: ${JSON.stringify(ev)}\n\n`); } catch (e) { log.debug('server', 'event stream write failed', e); } };
+    res.write(': connected\n\n');
+    for (const ev of bus.since(last, types.length ? types : null)) send(ev);
+    const off = bus.on('*', (ev) => { if (!types.length || types.includes(ev.type)) send(ev); });
+    const beat = setInterval(() => { try { if (!res.writableEnded) res.write(': keepalive\n\n'); } catch (e) { log.debug('server', 'event keepalive failed', e); } }, 15000);
+    res.on('close', () => { off(); clearInterval(beat); });
+    return true;
+  }
+
+  if (pathname === '/api/fleet/status' && method === 'GET') { sendJson(res, 200, await fleetStatus()); return true; }
+
+  if (pathname === '/api/fleet/create' && method === 'POST') {
+    const b = await readBody(req);
+    const f = await fleet.create({ name: b.name, members: (Array.isArray(b.members) ? b.members : []).slice(0, 20) });
+    sendJson(res, 200, { fleet: f });
+    return true;
+  }
+  if (pathname === '/api/fleet/member' && method === 'POST') {
+    const b = await readBody(req);
+    sendJson(res, 200, { member: await fleet.addMember(wantFleet(b), { agent: b.agent || undefined, model: b.model || '', title: b.title || '', sessionId: b.sessionId || '' }) });
+    return true;
+  }
+  if (pathname === '/api/fleet/remove' && method === 'POST') {
+    const b = await readBody(req);
+    if (b.sessionId) { running.get(b.sessionId)?.ac.abort(); fleet.removeMember(wantFleet(b), b.sessionId); }
+    else { for (const id of fleet.removeFleet(wantFleet(b))) running.get(id)?.ac.abort(); }
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+  if (pathname === '/api/fleet/dispatch' && method === 'POST') {
+    const b = await readBody(req);
+    if (!cfg.loadConfig().model && !b.model) { const e = new Error('no model selected — pick a model in the top bar first'); e.status = 400; throw e; }
+    sendJson(res, 200, { results: await fleet.dispatch(wantFleet(b), { member: b.member || 'all', task: b.task }) });
+    return true;
+  }
+  if (pathname === '/api/fleet/link' && method === 'POST') {
+    const b = await readBody(req);
+    sendJson(res, 200, { link: fleet.link(wantFleet(b), { from: b.from, to: b.to, on: b.on, template: b.template }) });
+    return true;
+  }
+  if (pathname === '/api/fleet/unlink' && method === 'POST') {
+    const b = await readBody(req);
+    fleet.unlink(wantFleet(b), b.linkId);
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+  if (pathname === '/api/fleet/stop' && method === 'POST') {
+    const b = await readBody(req);
+    const queued = fleet.cancelQueued(b.sessionId);
+    const live = running.get(b.sessionId);
+    if (live) live.ac.abort();
+    sendJson(res, 200, { ok: true, stopped: queued || !!live });
+    return true;
+  }
+
+  if (pathname === '/api/memory/status' && method === 'GET') {
+    recall.configure(cfg.loadConfig());
+    sendJson(res, 200, recall.stats());
+    return true;
+  }
+  if (pathname === '/api/memory/search' && method === 'GET') {
+    const q = String(url.searchParams.get('q') || '').trim();
+    if (!q) { sendJson(res, 200, { hits: [] }); return true; }
+    recall.configure(cfg.loadConfig());
+    const sid = url.searchParams.get('scope') === 'session' ? url.searchParams.get('session') : null;
+    const limit = Math.min(30, Math.max(1, Number(url.searchParams.get('limit')) || 10));
+    sendJson(res, 200, { hits: await recall.searchHybrid(q, { limit, sid, maxChars: 700 }), semantic: recall.stats().semantic.enabled });
+    return true;
+  }
+  if (pathname === '/api/memory/recent' && method === 'GET') {
+    const sid = url.searchParams.get('scope') === 'session' ? url.searchParams.get('session') : null;
+    sendJson(res, 200, { hits: recall.recent({ limit: Math.min(50, Number(url.searchParams.get('limit')) || 15), sid }) });
+    return true;
+  }
+  if (pathname === '/api/memory/context' && method === 'GET') {
+    const id = url.searchParams.get('session');
+    if (!id) { sendJson(res, 200, { session: null }); return true; }
+    const s = await sessions.get(id);
+    const info = await contextInfo(s.model, s);
+    sendJson(res, 200, {
+      session: {
+        id: s.id, title: s.title || '(untitled)', agent: s.agent, model: s.model, ...info, pct: info.ctx ? Math.min(999, Math.round((info.used / info.ctx) * 100)) : 0,
+        messages: s.messages.length, archived: s.archived || 0, compactions: s.compactions || 0, todos: (s.todos || []).length,
+        summaries: (s.summaries || []).map((x) => ({ n: x.n, ts: x.ts, covered: x.covered, preview: String(x.text || '').slice(0, 400) })),
+        lastRecall: s.lastRecall || null,
+      },
+    });
+    return true;
+  }
+  if (pathname === '/api/memory/reindex' && method === 'POST') {
+    const config = cfg.loadConfig();
+    recall.configure(config);
+    require('./lib/embed').resetBackoff();
+    for (const s of await sessions.all()) recall.indexSession(s);
+    recall.pump().catch(log.swallow('recall', 'embedding backfill failed'));
+    sendJson(res, 200, recall.stats());
+    return true;
+  }
+  return false;
+}
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -658,6 +834,7 @@ const startup = { sessionId: null, agent: args.agent || null };
   let workDir;
   try { workDir = cfg.setWorkDir(args.dir || process.cwd()); } catch (e) { console.error(`cannot open the directory: ${e.message}`); log.error('boot', 'setWorkDir failed', e); process.exit(1); }
   pruneToolOutput();
+  recall.configure(cfg.loadConfig());
   await plugins.load(cfg.loadConfig());
   if (args.session) startup.sessionId = args.session;
   else if (args.cont) { try { startup.sessionId = (await sessions.latest())?.id || null; } catch (e) { log.warn('boot', 'could not find the latest session to continue', e); } }
