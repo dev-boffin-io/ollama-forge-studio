@@ -695,6 +695,17 @@ async function fleetStatus() {
   return st;
 }
 
+/** Give every idle member of the fleet the model the user picked (handoff targets included, so A -> B never runs on an old model). */
+async function applyFleetModel(fleetId, model) {
+  const f = fleet.status().fleets.find((x) => x.id === fleetId);
+  if (!f) return;
+  for (const m of f.members) {
+    if (running.has(m.sessionId)) continue;
+    try { const s = await sessions.get(m.sessionId); if (s.model !== model) { s.model = model; await sessions.save(s); } }
+    catch (e) { log.debug('server', `could not set the model of fleet member ${m.sessionId}`, e); }
+  }
+}
+
 const wantFleet = (b) => { if (!b.fleetId) { const e = new Error('fleetId is required'); e.status = 400; throw e; } return b.fleetId; };
 
 /** /api/events (live SSE), /api/fleet/*, /api/memory/*. Returns true when the request was handled. */
@@ -738,7 +749,9 @@ async function handleDashboardApi(req, res, url) {
   if (pathname === '/api/fleet/dispatch' && method === 'POST') {
     const b = await readBody(req);
     if (!cfg.loadConfig().model && !b.model) { const e = new Error('no model selected — pick a model in the top bar first'); e.status = 400; throw e; }
-    sendJson(res, 200, { results: await fleet.dispatch(wantFleet(b), { member: b.member || 'all', task: b.task }) });
+    const fid = wantFleet(b);
+    if (b.model) await applyFleetModel(fid, String(b.model));   // like /api/chat: the model picked in the top bar wins over a stale saved one
+    sendJson(res, 200, { results: await fleet.dispatch(fid, { member: b.member || 'all', task: b.task }) });
     return true;
   }
   if (pathname === '/api/fleet/link' && method === 'POST') {

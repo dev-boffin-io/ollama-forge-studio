@@ -105,3 +105,31 @@ test('fleet: dispatch, automatic handoff A -> B, live events and memory search',
   assert.equal((await post('/api/fleet/remove', { fleetId })).status, 200);
   assert.deepEqual((await status()).fleets, []);
 });
+
+test('fleet: the model picked in the top bar overrides a stale saved model (members and handoff targets)', async (t) => {
+  const ollama = await fakeOllama();
+  t.after(() => { ollama.closeAllConnections(); ollama.close(); });
+  // the saved config points at a model that does not exist on this endpoint; the user picked "fake" in the top bar (not saved)
+  fs.writeFileSync(path.join(ctx.home, 'config.json'), JSON.stringify({ endpoint: `http://127.0.0.1:${ollama.address().port}`, model: 'stale/not-installed', snapshots: false, wakeOnProcessExit: false }));
+  const { child, port } = await startServer();
+  t.after(() => child.kill('SIGKILL'));
+  const base = `http://127.0.0.1:${port}`;
+  const post = async (p, body) => { const r = await fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); return { status: r.status, json: await r.json() }; };
+  const status = async () => (await (await fetch(base + '/api/fleet/status')).json());
+
+  const created = await post('/api/fleet/create', { name: 'm', members: [{ agent: 'build' }, { agent: 'plan' }] });
+  const [a] = created.json.fleet.members;
+  const fleetId = created.json.fleet.id;
+  assert.ok((await status()).fleets[0].members.every((m) => m.model === 'stale/not-installed'), 'without a top-bar model the saved one is used');
+
+  const d = await post('/api/fleet/dispatch', { fleetId, member: a.sessionId, task: 'hello', model: 'fake' });
+  assert.equal(d.status, 200);
+  const st = (await status()).fleets[0];
+  assert.ok(st.members.every((m) => m.model === 'fake'), 'every member (including the one that was not dispatched) now uses the top-bar model');
+  for (let i = 0; i < 100 && (await status()).fleets[0].members.find((m) => m.sessionId === a.sessionId).status !== 'done'; i++) await wait(100);
+  assert.equal((await status()).fleets[0].members.find((m) => m.sessionId === a.sessionId).status, 'done');
+
+  const added = await post('/api/fleet/member', { fleetId, agent: 'build', model: 'fake' });
+  assert.equal(added.status, 200);
+  assert.equal((await status()).fleets[0].members.find((m) => m.sessionId === added.json.member.sessionId).model, 'fake');
+});

@@ -2,6 +2,7 @@
 /* Chat / Fleet / Memory tabs. Loaded after app.js (uses its $, api, escapeHtml, ago, state, openSession). */
 
 (() => {
+  const topModel = () => { const el = $('model'); return (el && el.value) || ''; };   // the top-bar model, like the chat sends
   const POST = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body || {}), retry: false });
   const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
   const clip = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; };
@@ -166,7 +167,7 @@
       add.hidden = !ui.adding;
       add.onsubmit = async (e) => {
         e.preventDefault();
-        try { await POST('/api/fleet/member', { fleetId: ui.fleetId, agent: add.elements.agent.value, title: add.elements.title.value.trim() }); ui.adding = false; refreshFleet(); } catch (err) { alert(err.message); }
+        try { await POST('/api/fleet/member', { fleetId: ui.fleetId, agent: add.elements.agent.value, model: topModel(), title: add.elements.title.value.trim() }); ui.adding = false; refreshFleet(); } catch (err) { alert(err.message); }
       };
     }
     const disp = $('flDispatch');
@@ -176,7 +177,7 @@
         const task = disp.elements.task.value.trim();
         if (!task) return showErr('flErr', 'write a task first');
         try {
-          const r = await POST('/api/fleet/dispatch', { fleetId: ui.fleetId, member: disp.elements.member.value, task });
+          const r = await POST('/api/fleet/dispatch', { fleetId: ui.fleetId, member: disp.elements.member.value, task, model: topModel() });
           const skipped = r.results.filter((x) => x.status === 'busy').length;
           disp.elements.task.value = '';
           if (skipped) showErr('flErr', `${skipped} agent(s) were busy and skipped`);
