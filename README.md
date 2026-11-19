@@ -341,6 +341,37 @@ The default (top-level) provider also accepts an optional `apiKey`.
 | Groq | `openai` | `https://api.groq.com/openai/v1` |
 | OpenRouter | `openai` | `https://openrouter.ai/api/v1` |
 
+### Using Local OpenAI-compatible Servers (LM Studio, llama.cpp, etc.)
+
+These tools are fully supported via the `openai` provider type because they implement the OpenAI-compatible API standard. To use them, add them to your `config.json` as follows:
+
+#### LM Studio
+```json
+{
+  "providers": {
+    "lmstudio": {
+      "type": "openai",
+      "endpoint": "http://localhost:1234/v1"
+    }
+  },
+  "defaultProvider": "lmstudio"
+}
+```
+
+#### llama.cpp (Server Mode)
+```json
+{
+  "providers": {
+    "llama_cpp": {
+      "type": "openai",
+      "endpoint": "http://localhost:8080/v1"
+    }
+  },
+  "defaultProvider": "llama_cpp"
+}
+```
+
+
 Optional per-provider keys: `contextWindow`, `maxTokens` (Anthropic output cap, default 32000, steps down automatically for older models).
 Models are referenced as `provider/model` (the top-level `endpoint` is provider `default`); agents can pin a model
 in frontmatter (`model: openrouter/anthropic/claude-sonnet-4`). Keys go in `apiKey` or `apiKeyEnv` (env var name) and
