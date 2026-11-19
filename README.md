@@ -177,10 +177,24 @@ The chat pane has three tabs.
 Switch primary agents from the dropdown in the chat header. Primary agents can delegate to subagents with the
 `task` tool; every subagent run is stored as a child session (subagents cannot spawn subagents).
 
-**Bundled agents:** every `examples/agents/*.md` (`reviewer`, `debug-agent`, `security-agent`, …) ships with the app
+**Bundled agents:** every `examples/agents/*.md` ships with the app
 and is available out of the box — also inside the single-file executable. They are the *lowest* layer
 (bundled < global < project), so a file with the same name in your own folders replaces the bundled one.
 Set `OLLAMA_STUDIO_NO_BUNDLED=1` to switch the bundled agents *and* skills off.
+
+| Bundled agent           | Access                                                                  | Job |
+|-------------------------|-------------------------------------------------------------------------|-----|
+| `reviewer`              | read-only (`git diff/log/show`)                                          | code review with file:line findings |
+| `security-agent`        | read-only (+ `npm audit`)                                                | secrets / vulnerability / dependency audit |
+| `debug-agent`           | full access                                                              | reproduce → root cause → verified fix |
+| `architect`             | writes only `.studio/plans/*.md` and `docs/architecture/*.md`, read-only bash | system / schema / API-contract design with Mermaid diagrams |
+| `test-engineer`         | edits **test files only** (`*.test.*`, `tests/`, `conftest.py`, …); test runners allowed | writes and runs tests, never touches production code |
+| `doc-writer`            | `*.md` and `docs/` freely, other files ask first; read-only bash         | README, API docs, doc comments, checked against the code |
+| `performance-optimizer` | edits and commands ask first; reading is free                            | measure-first profiling and optimization |
+
+The four newest are `mode: all` (pick them in the dropdown or delegate with `task`) with `auto: false`, so they do not
+crowd the [auto mode](#auto-mode) rotation. Any agent can run on its own model: add `model: provider/model` to its
+frontmatter (e.g. a cheap model for `doc-writer`, a strong one for `architect`).
 
 ### Auto mode
 
@@ -233,7 +247,7 @@ or crash never loses work. Reopen the studio in the same directory and the sessi
 
 ## Tools
 
-`list_files`, `glob` (truncated results signal), `grep` (truncated results signal), `read_file` (line numbers, 5000-line / size cap, binary detection, "did you mean", array of paths), `move_file`, `write_file`, `edit_file` (dry_run), `multi_edit`, `json_edit`, `delete_file`, `bash`, `todo_write`, `task` (subagents, resumable with `task_id`),
+`list_files`, `glob` (truncated results signal), `grep` (truncated results signal), `read_file` (line numbers, 5000-line / size cap, binary detection, "did you mean", array of paths), `move_file`, `write_file`, `edit_file` (dry_run), `multi_edit`, `json_edit`, `delete_file`, `bash`, `process` (list / output / kill / **input**), `todo_write`, `task` (subagents, resumable with `task_id`),
 `question` (ask you a question, with options), `plan_exit` (plan agent only), `webfetch`, `websearch`, `skill`, `lsp`,
 any MCP tools, and plugin tools (`<plugin>_<tool>`). Plugin and MCP tools ask for permission by default.
 
@@ -448,10 +462,19 @@ or the global equivalents (`~/.config/ollama-studio/skills`, `~/.claude/skills`,
 The model sees the list and loads one on demand with the `skill` tool.
 
 **Bundled skills:** every folder in `examples/skills/` (`commit-style`, `doc-generator`, `git-workflow`, `refactor-expert`,
-`test-and-verify`) is loaded by default and is overridden by a skill of the same `name` in any of the folders above.
+`test-and-verify`, `project-onboarding`, `dependency-upgrade`, `release-notes`) is loaded by default and is overridden by a skill of the same `name` in any of the folders above.
 In the single-file executable they are embedded at build time (`npm run build`) and unpacked once to
 `~/.config/ollama-studio/bundled/<hash>/`, so a skill's `scripts/` and `reference/` files still have a real path.
 To ship another default agent or skill, drop it into `examples/agents/` or `examples/skills/` and rebuild.
+
+## Extras (optional, off by default)
+
+`extras/` holds things that are useful to some people but would cost prompt tokens for everyone if they shipped as defaults:
+skills `api-designer`, `docker-expert`, `database-migration`, `i18n-l10n`, `bug-triage` and the plugins `http-request`
+(tool `http_request`: API client with env-based secret injection and a private-network guard) and `ast-search` (tool
+`ast_search`: structural code search, needs the external `ast-grep` binary). They are enabled with
+`skills.paths` / `plugins.paths` in the config; see [`extras/README.md`](extras/README.md). They are not embedded in the
+single-file executable.
 
 ## Web tools
 
@@ -485,6 +508,13 @@ Several `task` calls in one model message run **in parallel**.
   - **Logs on disk:** every background process also writes `~/.studio/<project>/jobs/<id>-<time>.log` (kept 7 days).
   - The `process` tool (`list` / `output` / `kill`) and **Tools → Background processes → Kill** still work; jobs die
     when the studio exits.
+  - **Interactive programs (prompts, REPLs, scaffolders):** start with `bash background=true interactive=true` to keep
+    stdin open, then answer with `process action=input id=proc_N text="…"` (Enter is appended; `newline=false` for raw
+    keystrokes, `close_stdin=true` sends EOF). The result contains the output the program produced in response. Sending
+    input is treated like running a command: it follows the agent's `bash` permission rules (an agent without bash cannot
+    type into a shell), and "Always allow" remembers only `stdin→<id> *`, never a command hidden in the text. Without
+    `interactive`, stdin stays closed (EOF), as before, so ordinary commands never hang waiting for input. This is a plain
+    pipe, not a PTY: programs that insist on a real terminal need their non-interactive flags (`--yes`, `--no-input`).
 - **Downloads** (`GET /api/download?path=`) are real file downloads: `Content-Length` (the browser shows the total
   size), `Accept-Ranges` + `206 Partial Content` (Pause/Resume and continuing after a dropped connection),
   `ETag`/`If-Range` (a resume never glues a new file onto an old partial one) and streaming from disk. Files inside
@@ -595,6 +625,7 @@ lib/commands.js      slash commands
 lib/sessions.js      persistent sessions (+ fork, export)
 lib/agents.js        built-in + markdown agents, system prompt, AGENTS.md
 lib/bundled.js       bundled layer: examples/{agents,skills} as defaults (source + single executable)
+extras/              opt-in skills + plugins (api-designer, docker-expert, http_request, ast_search …), see extras/README.md
 lib/auto.js          auto mode: per-message router (agent hand-over lives in lib/tools.js + lib/agent.js)
 lib/tools.js         tool schemas, permissions, bash, plugin tool dispatch, hook calls
 lib/agent.js         agent loop, subagents, compaction, lifecycle hooks
@@ -610,7 +641,7 @@ lib/lsp.js           LSP client + diagnostics
 lib/skills.js        SKILL.md loader
 lib/web.js           webfetch / websearch
 lib/snapshot.js      shadow-git snapshots
-lib/procs.js         foreground/background process management (exit events, progress, job logs)
+lib/procs.js         foreground/background process management (exit events, progress, job logs, interactive stdin)
 lib/terminal.js      user terminal: run a shell command in the workdir, stream output over SSE
 lib/wake.js          wakes the agent when a background process finishes
 lib/serve-file.js    file downloads: Content-Length, Range/resume, build-output guard
