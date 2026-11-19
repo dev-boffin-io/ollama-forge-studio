@@ -126,6 +126,12 @@ Compaction and pruning can drop text from the live context, but it stays searcha
   "🔎 recalled N earlier snippet(s)". Turn off with `"recallAuto": false` in `config.json`.
 - **`recall` tool** – the model can search the whole project history itself (`query`, `limit`, `scope: project|session`).
   Hide it from an agent with `permission: { recall: deny }`.
+- **Semantic search (optional)** – set `"embedModel"` in `config.json` (a model ref such as `"nomic-embed-text"` or `"openai/text-embedding-3-small"`;
+  Ollama `/api/embed` and OpenAI-compatible `/embeddings` are supported). Every snippet is then also embedded in the background
+  (Float32 vectors in the same `recall.db`, cosine similarity in plain JS — no extension, no dependency) and both the automatic
+  recall and the `recall` tool fuse BM25 and vector rankings with Reciprocal Rank Fusion, so related text is found even without a
+  shared keyword or in another language. Existing history is embedded in the background too. If the embedding server is
+  unreachable the memory silently stays keyword-only (and retries after a minute). Changing `embedModel` re-embeds everything.
 - Deleting a session also deletes its index rows. Needs **Node ≥ 22.5** (built-in `node:sqlite`; the single binary includes it).
   On older Node the feature silently turns itself off.
 
@@ -133,6 +139,30 @@ Model "thinking" output is saved with the session and shown again when you reope
 
 Assistant replies are rendered as markdown (headings, bold/italic, lists incl. Bengali numerals, tables, quotes, links, inline code and
 syntax-coloured code blocks with a Copy button) by the dependency-free, XSS-safe `public/markdown.js`.
+
+## Fleet, event bus and dashboard (Chat · Fleet · Memory tabs)
+
+The chat pane has three tabs.
+
+- **Fleet** – a *fleet* is a named group of agents (each one a normal saved session). Create one, add agents (`build`, `plan`, your
+  custom ones, `auto`), then **dispatch** a task to one agent or to all idle ones. At most `fleet.maxParallel` (default 3) agents run
+  at once; the rest wait in a queue. Cards show live status (idle · queued · running · **needs input** · done · failed), the last
+  task and the last report; *Open* jumps to the agent's chat (that is where you answer a permission prompt).
+  **Handoffs** are triggers on the event bus: *"when A finishes → start B"* with A's final report put into B's message
+  (template placeholders `{{result}}`, `{{task}}`, `{{from}}`; `when done | failed | always`). Chains are capped at
+  `fleet.maxChain` (default 8) automatic hops so a loop A → B → A cannot run away. Fleets are saved per project in
+  `~/.studio/<project>/fleets.json`; runs that were active when the studio stopped come back as idle.
+- **Memory** – the memory/context explorer: index size, semantic-index progress, the context meter of the open session
+  (live vs. archived messages, compactions, summaries), the snippets that were injected into the last turn, and a search box
+  (whole project / this session) that shows for every hit whether it came from BM25, the vectors or both.
+- **Event bus** (`lib/events.js`) – the studio announces `agent_started`, `agent_finished_task`, `agent_failed`, `agent_aborted`
+  (also for subagents, with `isChild`), `memory_recalled`, `memory_embedded` and `fleet_updated`. The dashboard listens through
+  `GET /api/events` (SSE; resumes from `Last-Event-ID`, `?since=N`, `?types=a,b`), plugins can use `require('./events').bus`.
+
+```jsonc
+// config.json
+{ "embedModel": "nomic-embed-text", "fleet": { "maxParallel": 3, "maxChain": 8 } }
+```
 
 ## Agents
 
@@ -530,6 +560,15 @@ Keys: `endpoint`, `model`, `smallModel`, `providers`, `defaultProvider`, `agent`
 | GET | `/api/terminal/:id/stream` | SSE: buffered + live `output` (`stdout`/`stderr`, `seq`) then `exit` |
 | POST | `/api/answer` `{id, answer}` | answer a `question` from the agent |
 | POST | `/api/sessions/:id/undo` / `redo` | revert / re-apply the last turn |
+| GET | `/api/events` | SSE: live studio events (see *Fleet, event bus and dashboard*) |
+| GET | `/api/fleet/status` | fleets, members (status, last task/report), links, slots in use |
+| POST | `/api/fleet/create` `{name, members:[{agent, model?, title?}]}` | new fleet (members are new sessions) |
+| POST | `/api/fleet/member` `{fleetId, agent, model?, title?, sessionId?}` | add an agent (or an existing session) |
+| POST | `/api/fleet/dispatch` `{fleetId, member: sessionId\|"all", task}` | send a task → `[{sessionId, status: started\|queued\|busy}]` |
+| POST | `/api/fleet/link` `{fleetId, from, to, on?, template?}` / `unlink` `{fleetId, linkId}` | handoff trigger |
+| POST | `/api/fleet/stop` `{sessionId}` / `remove` `{fleetId, sessionId?}` | stop / remove member or fleet |
+| GET | `/api/memory/status`, `/search?q=&scope=&session=`, `/recent`, `/context?session=` | memory explorer data |
+| POST | `/api/memory/reindex` | index every session and (re)start the embedding backfill |
 
 SSE events: `start, iteration, thinking, token, tool_call, tool_result, subagent, sub_event, todos,
 permission_request, permission_resolved, question, question_resolved, aborted, retry, agent, title, changes, compacting, metrics, warning, error, done`.
@@ -540,7 +579,11 @@ permission_request, permission_resolved, question, question_resolved, aborted, r
 server.js            HTTP + SSE + CLI
 scripts/build.js     single-executable build (bundle + embed UI + inject)
 lib/runtime.js       source vs. single-executable differences (embedded assets)
-lib/recall.js        SQLite FTS5 history index + keyword retrieval
+lib/recall.js        SQLite FTS5 history index + keyword retrieval (+ optional vectors, hybrid search)
+lib/embed.js         optional embedding client (Ollama /api/embed, OpenAI /embeddings)
+lib/events.js        in-process event bus (feeds fleets, the dashboard stream, plugins)
+lib/fleet.js         FleetManager: agent groups, dispatch queue, event-driven handoffs
+public/panels.js     Chat / Fleet / Memory tabs
 lib/attach.js        chat attachments: storage, text extraction, vision/OCR fallbacks
 public/markdown.js   markdown renderer for chat messages
 lib/config.js        layered config, working directory
