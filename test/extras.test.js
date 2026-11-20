@@ -101,7 +101,7 @@ test('new bundled skills load with a real base directory and appear in the promp
   withBundled(() => {
     const cfg = ctx.cfg.loadConfig();
     const all = skills.loadSkills(cfg);
-    for (const n of ['project-onboarding', 'dependency-upgrade', 'release-notes']) {
+    for (const n of ['project-onboarding', 'dependency-upgrade', 'release-notes', 'bug-triage', 'i18n-l10n']) {
       assert.ok(all[n], `${n} missing`);
       assert.equal(all[n].base, path.join(ROOT, 'examples', 'skills', n));
       assert.ok(skills.promptSection(cfg).includes(`- ${n}:`));
@@ -115,7 +115,7 @@ const extraSkillNames = () => fs.readdirSync(path.join(EXTRAS, 'skills'), { with
 
 test('extras/skills: valid frontmatter, name = folder, each ends with a verification-style rule block', () => {
   const names = extraSkillNames();
-  assert.deepEqual(names.sort(), ['api-designer', 'bug-triage', 'database-migration', 'docker-expert', 'i18n-l10n']);
+  assert.deepEqual(names.sort(), ['api-designer', 'database-migration', 'docker-expert']);
   for (const n of names) {
     const text = fs.readFileSync(path.join(EXTRAS, 'skills', n, 'SKILL.md'), 'utf8');
     const { meta, body } = agents.parseFrontmatter ? agents.parseFrontmatter(text) : { meta: {}, body: text };
