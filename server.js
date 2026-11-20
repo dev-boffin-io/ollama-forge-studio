@@ -156,9 +156,9 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       workDir: cfg.getWorkDir(),
       startup: startup,
-      agents: agents.primaryAgents().map(agentInfo),
-      subagents: agents.subagents().map(agentInfo),
-      commands: Object.values(commands.loadCommands()).map((c) => ({ name: c.name, description: c.description })),
+      agents: agents.primaryAgents(cfg.loadConfig()).map(agentInfo),
+      subagents: agents.subagents(cfg.loadConfig()).map(agentInfo),
+      commands: Object.values(commands.loadCommands(cfg.loadConfig())).map((c) => ({ name: c.name, description: c.description })),
       skills: Object.values(skills.loadSkills(cfg.loadConfig())).map((x) => ({ name: x.name, description: x.description })),
       lsp: lsp.available(cfg.loadConfig()),
       terminal: cfg.loadConfig().terminal !== false,
@@ -262,7 +262,7 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/sandbox' && method === 'GET') return sendJson(res, 200, sandbox.status(cfg.loadConfig()));
 
   if (pathname === '/api/agents' && method === 'GET') {
-    return sendJson(res, 200, { agents: Object.values(agents.loadAgents()).map(agentInfo) });
+    return sendJson(res, 200, { agents: Object.values(agents.loadAgents(cfg.loadConfig())).map(agentInfo) });
   }
 
   /* --- files in the working directory --- */
@@ -334,7 +334,7 @@ async function handleApi(req, res, url) {
         const b = await readBody(req);
         const s = await sessions.get(id);
         if (typeof b.title === 'string') s.title = b.title.slice(0, 120);
-        if (typeof b.agent === 'string' && agents.getAgent(b.agent)) s.agent = b.agent;
+        if (typeof b.agent === 'string' && agents.getAgent(b.agent, cfg.loadConfig())) s.agent = b.agent;
         if (typeof b.model === 'string') s.model = b.model;
         await sessions.save(s);
         return sendJson(res, 200, sessions.summary(s));
@@ -507,11 +507,11 @@ async function handleChat(req, res) {
   }
 
   const session = body.sessionId ? await sessions.get(body.sessionId) : await sessions.create({ agent: body.agent || config.agent, model: body.model || config.model });
-  if (body.agent && agents.getAgent(body.agent)) session.agent = body.agent;
+  if (body.agent && agents.getAgent(body.agent, config)) session.agent = body.agent;
   if (body.model) session.model = body.model;
   const model = session.model || config.model;
   if (!model) return sendJson(res, 400, { error: 'no model selected' });
-  let agent = agents.resolve(session) || agents.getAgent('build');     // "auto" runs as the agent it picked last (re-picked below)
+  let agent = agents.resolve(session, config) || agents.getAgent('build', config);     // "auto" runs as the agent it picked last (re-picked below)
   if (agent.mode === 'subagent') return sendJson(res, 400, { error: `"${agent.name}" is a subagent; pick a primary agent` });
 
   waker.onUserMessage(session.id);
@@ -556,11 +556,11 @@ function launchRun({ session, config, agent, model, text, att, res, wake = false
       let commandPickedAgent = false;
       let display = wake ? wakeDisplay : undefined;
       let attachments;
-      const exp = text && !wake ? await commands.expand(text) : null;
+      const exp = text && !wake ? await commands.expand(text, config) : null;
       if (exp) {
         content = exp.text; display = text;
         if (exp.command.agent) {
-          const ag = agents.getAgent(exp.command.agent);
+          const ag = agents.getAgent(exp.command.agent, config);
           if (ag && ag.mode !== 'subagent' && !ag.virtual) {
             if (agents.isAuto(session.agent)) session.autoAgent = ag.name;   // stay in auto mode; the command just picks this turn's agent
             else session.agent = ag.name;
@@ -636,7 +636,7 @@ async function startWakeRun(sessionId, notice) {
   if (running.has(sessionId)) return false;           // a user message won the race while the session was loading
   const model = session.model || config.model;
   if (!model) throw new Error('no model selected');
-  const agent = agents.resolve(session) || agents.getAgent('build');
+  const agent = agents.resolve(session, config) || agents.getAgent('build', config);
   if (!agent || agent.mode === 'subagent') throw new Error('no primary agent for this session');
   launchRun({ session, config, agent, model, text: notice.text, att: [], res: null, wake: true, wakeDisplay: notice.display });
   return true;
@@ -664,7 +664,7 @@ async function startFleetRun(sessionId, text) {
   if (running.has(sessionId)) return false;
   const model = session.model || config.model;
   if (!model) throw new Error('no model selected — pick a model in the top bar first');
-  const agent = agents.resolve(session) || agents.getAgent('build');
+  const agent = agents.resolve(session, config) || agents.getAgent('build', config);
   if (!agent || agent.mode === 'subagent') throw new Error('no primary agent for this session');
   waker.onUserMessage(session.id);
   launchRun({ session, config, agent, model, text, att: [], res: null, wake: false });
@@ -673,7 +673,7 @@ async function startFleetRun(sessionId, text) {
 
 async function createFleetSession({ agent, model, title }) {
   const config = cfg.loadConfig();
-  const a = agents.getAgent(agent || config.agent);
+  const a = agents.getAgent(agent || config.agent, config);
   if (!a || a.mode === 'subagent') { const e = new Error(`"${agent}" is not a primary agent`); e.status = 400; throw e; }
   return sessions.create({ agent: a.name, model: model || config.model, title: title || `${a.name} (fleet)` });
 }
