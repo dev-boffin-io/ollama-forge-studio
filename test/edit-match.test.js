@@ -1,7 +1,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { replace, miniDiff, unifiedDiff } = require('../lib/edit-match');
+const {
+  replace, miniDiff, unifiedDiff,
+  fuzzyLineMatch, rankMatches, indentationFlexible, whitespaceNormalized,
+} = require('../lib/edit-match');
 
 test('exact match replaces the region', () => {
   const r = replace('const a = 1;\nconst b = 2;\n', 'const a = 1;', 'const a = 99;');
@@ -55,6 +58,44 @@ test('picks the best block match when the middle drifted slightly', () => {
 test('trimmed boundary: leading/trailing whitespace in old_string is fine', () => {
   const r = replace('say hello now', '  hello  ', 'HI');
   assert.equal(r.content, 'say HI now');
+});
+
+test('fuzzyLineMatch finds near-identical lines using Levenshtein similarity', () => {
+  const content = 'const value = compute(1);\nconst other = 2;\n';
+  const find = 'const value = comput(1);';
+  assert.deepEqual([...fuzzyLineMatch(content, find)], ['const value = compute(1);']);
+  const r = replace(content, find, 'const value = compute(2);');
+  assert.equal(r.via, 'fuzzyLineMatch');
+  assert.equal(r.content, 'const value = compute(2);\nconst other = 2;\n');
+});
+
+test('indentation detection checks style and width per line', () => {
+  const find = '    return result;';
+  assert.deepEqual([...indentationFlexible('function f(){\n\treturn result;\n}', find)], ['\treturn result;']);
+  assert.deepEqual([...indentationFlexible('function f(){\n  \treturn result;\n}', find)], []);
+  assert.deepEqual([...indentationFlexible('function f(){\n        return result;\n}', find)], []);
+});
+
+test('rankMatches picks the highest-scoring candidate, not the first one', () => {
+  const content = [
+    'const alpha = zzz();', 'const beta = two();', '',
+    'const alpha = oen();', 'const beta = two();', '',
+  ].join('\n');
+  const find = 'const alpha = one();\nconst beta = two();';
+  const ranked = rankMatches(content, find);
+  assert.equal(ranked[0].via, 'fuzzyLineMatch');
+  assert.ok(ranked[0].idx > 20, 'the better second block ranks above the earlier weaker one');
+  assert.ok(ranked[0].score > ranked[1].score);
+  const r = replace(content, find, 'const alpha = fixed();\nconst beta = two();');
+  assert.ok(r.content.includes('const alpha = zzz();'));
+  assert.ok(r.content.includes('const alpha = fixed();'));
+});
+
+test('whitespaceNormalized handles tabs and repeated spaces inside a line', () => {
+  assert.deepEqual([...whitespaceNormalized('let\ta\t=\t1;\nlet b = 2;', 'let a = 1;')], ['let\ta\t=\t1;']);
+  const r = replace('const\tx\t=\tcompute(1);', 'const x = compute(1);', 'const x = compute(2);');
+  assert.equal(r.via, 'whitespaceNormalized');
+  assert.equal(r.content, 'const x = compute(2);');
 });
 
 test('miniDiff reports the changed region (git-style hunk)', () => {
