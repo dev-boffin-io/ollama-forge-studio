@@ -10,6 +10,7 @@ const ctx = setup();
 const ROOT = path.resolve(__dirname, '..');
 const EXTRAS = path.join(ROOT, 'extras');
 const agents = require('../lib/agents');
+const commands = require('../lib/commands');
 const skills = require('../lib/skills');
 const plugins = require('../lib/plugins');
 const hooks = require('../lib/hooks');
@@ -136,6 +137,8 @@ test('extras are NOT loaded by default, only when config.skills.paths points at 
 
 test('the bundled examples/ folder contains none of the extras', () => {
   for (const n of extraSkillNames()) assert.ok(!fs.existsSync(path.join(ROOT, 'examples', 'skills', n)), `${n} must live in extras only`);
+  for (const n of ['release-manager', 'support-triage']) assert.ok(!fs.existsSync(path.join(ROOT, 'examples', 'agents', `${n}.md`)), `${n} must live in extras only`);
+  for (const n of ['review', 'verify']) assert.ok(!fs.existsSync(path.join(ROOT, 'examples', 'commands', `${n}.md`)), `${n} must live in extras only`);
 });
 
 /* ---------- http_request plugin ---------- */
@@ -243,32 +246,106 @@ test('http_request: helper functions (private IP detection, host patterns, JSON 
 
 test('http_request: server shut down', async () => { await new Promise((r) => server.close(r)); plugins.reset(); });
 
-/* ---------- ast_search plugin ---------- */
+/* ---------- text_search plugin ---------- */
 
-test('ast_search: registers no tool when ast-grep is missing, works when it is installed', async () => {
+test('text_search: pure Node.js regex/string file search works without external binaries', async () => {
   plugins.reset(); hooks.reset();
   const dir = path.join(ctx.studioDir, 'plugins');
   fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(path.join(dir, 'ast-search'), { recursive: true });
-  fs.copyFileSync(path.join(EXTRAS, 'plugins', 'ast-search', 'plugin.js'), path.join(dir, 'ast-search', 'plugin.js'));
+  fs.mkdirSync(path.join(dir, 'text-search'), { recursive: true });
+  fs.copyFileSync(path.join(EXTRAS, 'plugins', 'text-search', 'plugin.js'), path.join(dir, 'text-search', 'plugin.js'));
 
-  // 1) binary missing (empty PATH): the plugin loads cleanly and offers nothing
-  const savedPath = process.env.PATH;
-  process.env.PATH = path.join(ctx.home, 'empty-bin');
-  let status;
-  try { status = await plugins.load(ctx.cfg.loadConfig()); } finally { process.env.PATH = savedPath; }
+  const status = await plugins.load(ctx.cfg.loadConfig());
   assert.equal(status.errors.length, 0, JSON.stringify(status.errors));
-  assert.equal(plugins.isTool('ast_search'), false);
+  assert.equal(plugins.isTool('text_search'), true);
 
-  // 2) binary present (only when the machine has it)
-  plugins.reset(); hooks.reset();
-  await plugins.load(ctx.cfg.loadConfig());
-  if (!plugins.isTool('ast_search')) return;                     // ast-grep not installed here: nothing more to check
   fs.writeFileSync(path.join(ctx.dir, 'a.ts'), 'function fetchUser(id: number) { return id; }\nconst x = fetchUser(1);\nconst y = fetchUser(2);\n');
-  const r = await plugins.callTool('ast_search', { pattern: 'fetchUser($ID)', lang: 'ts' }, {});
+  const r = await plugins.callTool('text_search', { query: 'fetchUser' }, {});
+  assert.match(r.output, /a\.ts:1:/);
   assert.match(r.output, /a\.ts:2:/);
-  assert.match(r.output, /a\.ts:3:/);
-  assert.equal(r.matches, 2);
-  await assert.rejects(() => plugins.callTool('ast_search', { pattern: 'x', lang: 'ts', path: '../outside' }, {}), /inside the working directory/);
-  await assert.rejects(() => plugins.callTool('ast_search', { pattern: 'x', lang: 'cobol' }, {}), /lang must be/);
+  assert.equal(r.matches, 3);
+
+  const reg = await plugins.callTool('text_search', { query: 'fetchUser\\(\\d+\\)', regex: true }, {});
+  assert.equal(reg.matches, 2);
+
+  await assert.rejects(() => plugins.callTool('text_search', { query: 'x', path: '../outside' }, {}), /inside the working directory/);
+});
+
+test('text_search: config controls ignored folders and the file size cap', async () => {
+  plugins.reset(); hooks.reset();
+  const dir = path.join(ctx.studioDir, 'plugins');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(path.join(dir, 'text-search'), { recursive: true });
+  fs.copyFileSync(path.join(EXTRAS, 'plugins', 'text-search', 'plugin.js'), path.join(dir, 'text-search', 'plugin.js'));
+
+  const status = await plugins.load({ ...ctx.cfg.loadConfig(), textSearch: { maxBytes: 10, ignoreFolders: ['skipme'] } });
+  assert.equal(status.errors.length, 0, JSON.stringify(status.errors));
+  assert.equal(plugins.isTool('text_search'), true);
+
+  fs.mkdirSync(path.join(ctx.dir, 'skipme'), { recursive: true });
+  fs.writeFileSync(path.join(ctx.dir, 'skipme', 'needle.txt'), 'needle');
+  fs.writeFileSync(path.join(ctx.dir, 'small.txt'), 'needle');
+  fs.writeFileSync(path.join(ctx.dir, 'big.txt'), 'needle'.repeat(10));
+
+  const r = await plugins.callTool('text_search', { query: 'needle' }, {});
+  assert.match(r.output, /small\.txt:1:/);
+  assert.doesNotMatch(r.output, /skipme|big\.txt/);
+});
+
+/* ---------- opt-in extras agents and commands ---------- */
+
+const extraAgentNames = () => fs.readdirSync(path.join(EXTRAS, 'agents')).filter((n) => n.endsWith('.md')).map((n) => n.slice(0, -3));
+
+test('extras/agents: valid frontmatter and opt-in loading through agents.paths', () => {
+  const names = extraAgentNames();
+  assert.deepEqual(names.sort(), ['release-manager', 'support-triage']);
+  for (const n of names) {
+    const text = fs.readFileSync(path.join(EXTRAS, 'agents', `${n}.md`), 'utf8');
+    const { meta, body } = agents.parseFrontmatter(text);
+    assert.ok(String(meta.description).length > 30, `${n}: description`);
+    assert.equal(meta.mode, 'all');
+    assert.equal(meta.auto, false);
+    assert.match(body, /\n## Rules/);
+  }
+
+  const base = ctx.cfg.loadConfig();
+  for (const n of names) assert.equal(agents.loadAgents(base)[n], undefined, `${n} must be opt-in`);
+  const on = agents.loadAgents({ ...base, agents: { paths: [path.join(EXTRAS, 'agents')] } });
+  for (const n of names) {
+    assert.ok(on[n], `${n} should load when enabled`);
+    assert.equal(on[n].source, 'config');
+  }
+});
+
+test('release-manager writes release docs but asks before version or git mutations; support-triage is read-only', () => {
+  const base = ctx.cfg.loadConfig();
+  const cfg = { ...base, agents: { paths: [path.join(EXTRAS, 'agents')] } };
+  const release = agents.getAgent('release-manager', cfg);
+  assert.equal(decide(release, 'edit', 'CHANGELOG.md'), 'allow');
+  assert.equal(decide(release, 'edit', 'docs/releases/v1.md'), 'allow');
+  assert.equal(decide(release, 'edit', 'package.json'), 'ask');
+  assert.equal(decide(release, 'bash', 'git tag --list'), 'allow');
+  assert.equal(decide(release, 'bash', 'git tag v1.2.3'), 'ask');
+
+  const triage = agents.getAgent('support-triage', cfg);
+  assert.equal(decide(triage, 'edit', 'src/app.js'), 'deny');
+  assert.equal(decide(triage, 'bash', 'git diff'), 'allow');
+  assert.equal(decide(triage, 'bash', 'npm install left-pad'), 'deny');
+});
+
+test('extras/commands: /verify and the /review override are opt-in through commands.paths', async () => {
+  const base = ctx.cfg.loadConfig();
+  assert.equal(commands.loadCommands(base).verify, undefined, '/verify must be opt-in');
+  assert.equal(commands.loadCommands(base).review.builtin, true, 'the built-in /review stays by default');
+
+  const cfg = { ...base, commands: { paths: [path.join(EXTRAS, 'commands')] } };
+  const all = commands.loadCommands(cfg);
+  assert.ok(all.verify);
+  assert.equal(all.review.builtin, false);
+  assert.match(all.review.description, /Deep opt-in review/);
+
+  const r = await commands.expand('/verify focus on tests', cfg);
+  assert.equal(r.command.name, 'verify');
+  assert.match(r.text, /focus on tests/);
+  assert.ok(!r.text.includes('$ARGUMENTS'));
 });
