@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { replace, miniDiff } = require('../lib/edit-match');
+const { replace, miniDiff, unifiedDiff } = require('../lib/edit-match');
 
 test('exact match replaces the region', () => {
   const r = replace('const a = 1;\nconst b = 2;\n', 'const a = 1;', 'const a = 99;');
@@ -57,15 +57,48 @@ test('trimmed boundary: leading/trailing whitespace in old_string is fine', () =
   assert.equal(r.content, 'say HI now');
 });
 
-test('miniDiff reports the changed region', () => {
+test('miniDiff reports the changed region (git-style hunk)', () => {
   const d = miniDiff('a\nb\nc', 'a\nB\nc');
   assert.equal(d.additions, 1);
   assert.equal(d.deletions, 1);
-  assert.ok(d.diff.includes('- b'));
-  assert.ok(d.diff.includes('+ B'));
-  assert.ok(d.diff.startsWith('@@ line 2 @@'));
+  assert.equal(d.diff, '@@ -1,3 +1,3 @@\n a\n-b\n+B\n c');
   const same = miniDiff('a\nb', 'a\nb');
   assert.equal(same.additions + same.deletions, 0);
+  assert.equal(same.diff, '');
+});
+
+test('unifiedDiff: separate hunks, exact line numbers, insert/delete/new file', () => {
+  const lines = Array.from({ length: 30 }, (_, i) => 'l' + (i + 1));
+  const after = lines.slice();
+  after[1] = 'L2';            // line 2 changed
+  after.splice(24, 1);        // line 25 deleted
+  after.splice(10, 0, 'new'); // inserted after l10
+  const d = unifiedDiff(lines.join('\n') + '\n', after.join('\n') + '\n');
+  assert.equal(d.additions, 2);
+  assert.equal(d.deletions, 2);
+  const heads = d.diff.split('\n').filter((l) => l.startsWith('@@'));
+  assert.ok(heads.length >= 2, 'far-apart changes make separate hunks');
+  assert.ok(d.diff.includes('-l2\n+L2'));
+  assert.ok(d.diff.includes('-l25'));
+  assert.ok(d.diff.includes('+new'));
+  // applying the hunks back must reproduce the new text: every +/ctx line is in `after`, every -/ctx line in `lines`
+  for (const l of d.diff.split('\n')) {
+    if (l.startsWith('+')) assert.ok(after.includes(l.slice(1)));
+    if (l.startsWith('-')) assert.ok(lines.includes(l.slice(1)));
+  }
+  const n = unifiedDiff('', 'x\ny\n');
+  assert.equal(n.diff, '@@ -0,0 +1,2 @@\n+x\n+y');
+  assert.deepEqual([n.additions, n.deletions], [2, 0]);
+  const g = unifiedDiff('a\nb\n', '');
+  assert.equal(g.diff, '@@ -1,2 +0,0 @@\n-a\n-b');
+});
+
+test('unifiedDiff: CRLF vs LF only is not a change, long diffs are cut with exact counts', () => {
+  assert.equal(unifiedDiff('a\r\nb\r\n', 'a\nb\n').diff, '');
+  const big = unifiedDiff('', Array.from({ length: 500 }, (_, i) => 'r' + i).join('\n'), { maxLines: 50 });
+  assert.equal(big.additions, 500);
+  assert.equal(big.diff.split('\n').length, 51);
+  assert.match(big.diff, /… \d+ more diff lines/);
 });
 
 test('not-found error shows the closest ACTUAL region so the model can copy it', () => {

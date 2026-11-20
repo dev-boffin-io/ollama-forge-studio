@@ -256,3 +256,50 @@ test('pruneToolOutputs keeps the latest unchanged read_file per file, prunes sta
   assert.equal(!!m[3].pruned, true);    // file changed afterwards
   assert.equal(!!m[7].pruned, true);    // unrelated big output
 });
+
+test('write_file / edit_file / delete_file return git-style diffs; ui_diff exists for the UI', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const tools = require('../lib/tools');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ofs-diff-' + Date.now()));
+  const prev = process.env.OLLAMA_STUDIO_HOME;
+  process.env.OLLAMA_STUDIO_HOME = tmp;
+  const cfg = require('../lib/config');
+  cfg._cache = null;
+  try {
+    const wd = cfg.getWorkDir();
+    const c = () => ({ agent: { name: 'build' }, config: cfg.loadConfig(), session: { id: 's-diff', messages: [], journal: [], turn: 0 }, root: { journal: [], turn: 0 }, inherited: [], emit: () => {}, askPermission: async () => 'once', askUser: async () => '' });
+    // create
+    const made = await tools.executeTool('write_file', { path: 'src/new.js', content: 'a\nb\nc\n' }, c());
+    assert.equal(made.created, true);
+    assert.equal(made.diff, '@@ -0,0 +1,3 @@\n+a\n+b\n+c');
+    assert.equal(made.additions, 3);
+    assert.ok(made.ui_diff.includes('+b'));
+    // overwrite
+    const over = await tools.executeTool('write_file', { path: 'src/new.js', content: 'a\nB\nc\nd\n' }, c());
+    assert.equal(over.created, false);
+    assert.deepEqual([over.additions, over.deletions], [2, 1]);
+    assert.ok(over.diff.includes('-b') && over.diff.includes('+B') && over.diff.includes('+d'));
+    // identical rewrite
+    const same = await tools.executeTool('write_file', { path: 'src/new.js', content: 'a\nB\nc\nd\n' }, c());
+    assert.equal(same.unchanged, true);
+    assert.equal(same.diff, undefined);
+    // edit
+    const ed = await tools.executeTool('edit_file', { path: 'src/new.js', old_string: 'c', new_string: 'C' }, c());
+    assert.deepEqual([ed.additions, ed.deletions], [1, 1]);
+    assert.ok(ed.diff.includes('-c\n+C'));
+    assert.equal(fs.readFileSync(path.join(wd, 'src/new.js'), 'utf8'), 'a\nB\nC\nd\n');
+    // multi_edit
+    const me = await tools.executeTool('multi_edit', { path: 'src/new.js', edits: [{ old_string: 'a', new_string: 'A' }, { old_string: 'd', new_string: 'D' }] }, c());
+    assert.deepEqual([me.additions, me.deletions], [2, 2]);
+    // delete
+    const del = await tools.executeTool('delete_file', { path: 'src/new.js' }, c());
+    assert.equal(del.deleted, true);
+    assert.equal(del.deletions, 4);
+    assert.ok(!fs.existsSync(path.join(wd, 'src/new.js')));
+  } finally {
+    process.env.OLLAMA_STUDIO_HOME = prev;
+    cfg._cache = null;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

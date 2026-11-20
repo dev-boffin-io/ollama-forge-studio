@@ -85,7 +85,7 @@ test('a turn that stops with open todos is nudged and continued; a finished list
   await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, nudgePrompt: false, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
 
   const ev = await chat(base, 'build the thing');
-  assert.ok(ev.some((e) => e.type === 'info' && /এগিয়ে/.test(e.text)), 'the unfinished turn should be nudged');
+  assert.ok(ev.some((e) => e.type === 'info' && /work is not finished/.test(e.text)), 'the unfinished turn should be nudged');
   assert.ok(fake.requests.some((r) => r.messages.some((m) => /not finished/.test(m.content || ''))), 'the nudge is sent to the model');
   assert.ok(ev.some((e) => e.type === 'todos' && e.todos.length === 0), 'a finished checklist is cleared at the end of the turn');
   assert.ok(ev.some((e) => e.type === 'done'));
@@ -108,12 +108,12 @@ test('todos left open in an earlier turn do not nudge a later turn', async (t) =
   const first = await chat(base, 'plan it');
   const sid = first.find((e) => e.type === 'start').sessionId;
   assert.ok(sid, 'the first turn returns its session id');
-  assert.ok(first.some((e) => e.type === 'info' && /এগিয়ে/.test(e.text)), 'the first turn is nudged while its own todo is open');
+  assert.ok(first.some((e) => e.type === 'info' && /work is not finished/.test(e.text)), 'the first turn is nudged while its own todo is open');
 
   laterCalls = 0;
   const second = await chat(base, 'hello', sid);
   assert.equal(laterCalls, 1, 'a stale todo must not make the model run again');
-  assert.ok(!second.some((e) => e.type === 'info' && /এগিয়ে/.test(e.text)), 'the later turn is not nudged');
+  assert.ok(!second.some((e) => e.type === 'info' && /work is not finished/.test(e.text)), 'the later turn is not nudged');
 });
 
 test('the nudge asks the user before continuing; approving sends the nudge', async (t) => {

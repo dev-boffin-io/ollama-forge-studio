@@ -585,16 +585,38 @@ const setDirty = (on) => { $('dirtyDot').className = 'dirty' + (on ? ' on' : '')
 
 /* ---------- chat rendering ---------- */
 
+/** git-style diff: "@@ -a,b +c,d @@" hunks with " " / "-" / "+" lines -> coloured rows with old/new line-number gutters. */
+function diffHtml(diff, result) {
+  const rows = [];
+  let o = 0;
+  let n = 0;
+  for (const raw of escapeHtml(truncate(diff, 60000)).split('\n').slice(0, 900)) {
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
+    if (h) { o = +h[1]; n = +h[2]; rows.push(`<div class="dl hunk"><span class="ln"></span><span class="ln"></span><span class="sg"></span><span class="tx">${raw}</span></div>`); continue; }
+    const c = raw[0];
+    const body = raw.slice(1);
+    if (c === '+') rows.push(`<div class="dl add"><span class="ln"></span><span class="ln">${n++}</span><span class="sg">+</span><span class="tx">${body}</span></div>`);
+    else if (c === '-') rows.push(`<div class="dl del"><span class="ln">${o++}</span><span class="ln"></span><span class="sg">-</span><span class="tx">${body}</span></div>`);
+    else if (c === ' ') rows.push(`<div class="dl ctx"><span class="ln">${o++}</span><span class="ln">${n++}</span><span class="sg"></span><span class="tx">${body}</span></div>`);
+    else rows.push(`<div class="dl hunk"><span class="ln"></span><span class="ln"></span><span class="sg"></span><span class="tx">${raw}</span></div>`);   // "… N more diff lines"
+  }
+  const add = Number(result.additions) || 0;
+  const del = Number(result.deletions) || 0;
+  const tag = result.created ? '<span class="dtag new">new file</span>' : result.deleted ? '<span class="dtag gone">deleted</span>' : '';
+  const stat = `<span class="stat"><span class="a">+${add}</span> <span class="d">\u2212${del}</span></span>`;
+  return `<div class="diff"><div class="diff-head">${tag}<span class="dpath">${escapeHtml(result.path || '')}</span>${stat}</div>${rows.join('')}</div>`;
+}
+
 function resultHtml(result, ok) {
   const color = ok ? 'var(--green)' : 'var(--red)';
   let html = '';
-  if (result && typeof result.diff === 'string') {
-    html += '<div class="diff">' + escapeHtml(truncate(result.diff, 40000)).split('\n').slice(0, 800).map((l) =>
-      `<div class="${l.startsWith('+ ') ? 'add' : l.startsWith('- ') ? 'del' : 'hunk'}">${l}</div>`).join('') + '</div>';
-    const { diff, ...rest } = result;
-    result = rest;
+  if (result && typeof result === 'object') {
+    const text = typeof result.ui_diff === 'string' ? result.ui_diff : result.diff;
+    if (typeof text === 'string' && text) html += diffHtml(text, result);
+    else if (result.unchanged) html += `<div class="diff"><div class="diff-head"><span class="dpath">${escapeHtml(result.path || '')}</span><span class="stat">no changes</span></div></div>`;
+    if (html) { const { diff, ui_diff, ...rest } = result; result = rest; }
   }
-  return html + `<pre style="margin-top:6px;color:${color}">→ ${escapeHtml(truncate(JSON.stringify(result), 1200))}</pre>`;
+  return html + `<pre style="margin-top:6px;color:${color}">\u2192 ${escapeHtml(truncate(JSON.stringify(result), 1200))}</pre>`;
 }
 
 
@@ -787,7 +809,7 @@ async function consumeRun(res) {
         if (c) {
           c.body.innerHTML += resultHtml(event.result, event.ok);
           c.card.classList.add(event.ok ? 'ok' : 'err');
-          c.card.classList.toggle('open', !event.ok);
+          c.card.classList.toggle('open', !event.ok || !!(event.result && (event.result.ui_diff || event.result.diff)));   // failed calls and file changes open by default
         }
         if (/write_file|edit_file|delete_file|bash/.test(event.name)) touchedFiles = true;
         break;

@@ -203,8 +203,21 @@ select { min-width: 200px; }
 
 .cmdhint { padding: 6px 12px; border-top: 1px solid var(--border); background: var(--bg); font-size: 12px; color: var(--muted); }
 .cmdhint b { color: var(--accent); cursor: pointer; font-family: var(--mono); }
-.diff { margin-top: 6px; font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; }
-.diff .add { color: var(--green); } .diff .del { color: var(--red); } .diff .hunk { color: var(--muted); }
+.diff { margin-top: 6px; font-family: var(--mono); font-size: 12px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.diff-head { display: flex; gap: 8px; align-items: center; padding: 5px 10px; background: rgba(127,127,127,.12); border-bottom: 1px solid var(--border); }
+.diff-head .dpath { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-head .stat .a { color: var(--green); font-weight: 600; } .diff-head .stat .d { color: var(--red); font-weight: 600; } .diff-head .stat { color: var(--muted); }
+.dtag { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; border: 1px solid currentColor; }
+.dtag.new { color: var(--green); } .dtag.gone { color: var(--red); }
+.diff { max-height: 460px; overflow: auto; }
+.diff .dl { display: flex; white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
+.diff .ln { flex: 0 0 3.2em; text-align: right; padding: 0 6px; color: var(--muted); opacity: .75; user-select: none; }
+.diff .sg { flex: 0 0 1.6em; text-align: center; user-select: none; font-weight: 700; }
+.diff .tx { flex: 1; min-width: 0; padding-right: 8px; }
+.diff .add { background: rgba(46,160,67,.18); } .diff .add .sg { color: var(--green); } .diff .add .tx { color: var(--green); }
+.diff .del { background: rgba(248,81,73,.18); } .diff .del .sg { color: var(--red); } .diff .del .tx { color: var(--red); }
+.diff .hunk { background: rgba(110,118,129,.16); color: var(--muted); }
+.diff .ctx .tx { color: var(--text); opacity: .75; }
 .question { border: 1px solid var(--accent); border-radius: 8px; padding: 9px 10px; background: #10202e; font-size: 12.5px; }
 .question .row { gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .question input { flex: 1; min-width: 120px; }
