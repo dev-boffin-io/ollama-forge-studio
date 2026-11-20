@@ -6,8 +6,15 @@ const path = require('node:path');
 const { setup } = require('./helpers');
 
 const ctx = setup();
+const ROOT = path.resolve(__dirname, '..');
 const plugins = require('../lib/plugins');
 const hooks = require('../lib/hooks');
+
+const withBundled = async (fn) => {
+  const prev = process.env.OLLAMA_STUDIO_NO_BUNDLED;
+  delete process.env.OLLAMA_STUDIO_NO_BUNDLED;
+  try { return await fn(); } finally { if (prev === undefined) delete process.env.OLLAMA_STUDIO_NO_BUNDLED; else process.env.OLLAMA_STUDIO_NO_BUNDLED = prev; }
+};
 
 function pluginDir() {
   const dir = path.join(ctx.studioDir, 'plugins');
@@ -124,4 +131,55 @@ test('plugin paths from config are loaded and duplicate names are skipped', asyn
   assert.ok(status.plugins.some((p) => p.name === 'extra'));
   assert.deepEqual(await plugins.callTool('extra_ping', {}), { pong: true });
   plugins.reset();
+});
+
+test('bundled example plugins load, register tools and respect plugins.enabled:false', async () => {
+  plugins.reset();
+  hooks.reset();
+  fs.rmSync(path.join(ctx.studioDir, 'plugins'), { recursive: true, force: true });
+  await withBundled(async () => {
+    const status = await plugins.load(ctx.cfg.loadConfig());
+    assert.equal(status.errors.length, 0, JSON.stringify(status.errors));
+    const now = status.plugins.find((p) => p.name === 'now');
+    const json = status.plugins.find((p) => p.name === 'json');
+    assert.ok(now && json, 'both bundled plugins should load');
+    assert.deepEqual(now.tools, ['now_now']);
+    assert.deepEqual(json.tools, ['json_format']);
+    assert.equal(now.dir, path.join(ROOT, 'examples', 'plugins', 'now'));
+    assert.equal(json.dir, path.join(ROOT, 'examples', 'plugins', 'json-format'));
+
+    const t = await plugins.callTool('now_now', { utc: true });
+    assert.match(t.iso, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(typeof t.unix_ms, 'number');
+    const f = await plugins.callTool('json_format', { text: '{"b":2,"a":1}', sort_keys: true, indent: 0 });
+    assert.equal(f.output, '{"a":1,"b":2}');
+    await assert.rejects(() => plugins.callTool('json_format', { text: '{bad' }), /invalid JSON/);
+  });
+  plugins.reset();
+  hooks.reset();
+
+  await withBundled(async () => {
+    const status = await plugins.load({ ...ctx.cfg.loadConfig(), plugins: { enabled: false } });
+    assert.equal(status.enabled, false);
+    assert.deepEqual(status.plugins, []);
+    assert.equal(plugins.isTool('now_now'), false);
+  });
+  plugins.reset();
+  hooks.reset();
+});
+
+test('user plugins override bundled plugins with the same name', async () => {
+  plugins.reset();
+  hooks.reset();
+  const dir = pluginDir();
+  fs.writeFileSync(path.join(dir, 'now.js'), "module.exports = { name: 'now', tools: { now: { description: 'override', handler: () => ({ output: 'user' }) } } };\n", 'utf8');
+  await withBundled(async () => {
+    const status = await plugins.load(ctx.cfg.loadConfig());
+    assert.equal(status.errors.length, 0, JSON.stringify(status.errors));
+    assert.equal(status.plugins.filter((p) => p.name === 'now').length, 1);
+    assert.deepEqual(await plugins.callTool('now_now', {}), { output: 'user' });
+    assert.ok(plugins.isTool('json_format'), 'unrelated bundled plugins are unaffected');
+  });
+  plugins.reset();
+  hooks.reset();
 });
