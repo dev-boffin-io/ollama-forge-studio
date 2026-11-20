@@ -12,6 +12,9 @@ const EXAMPLES = path.join(ROOT, 'examples');
 const bundled = require('../lib/bundled');
 const agents = require('../lib/agents');
 const skills = require('../lib/skills');
+const commands = require('../lib/commands');
+const plugins = require('../lib/plugins');
+const hooks = require('../lib/hooks');
 
 // helpers.setup() switches the layer off for every other suite; these tests turn it on explicitly.
 const withBundled = (fn) => {
@@ -81,13 +84,20 @@ test('bundled: OLLAMA_STUDIO_NO_BUNDLED switches the layer off', () => {
 test('unpack: writes the embedded files once, keeps modes, skips unsafe paths, prunes older builds', () => {
   const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'bundled-unpack-'));
   try {
-    const files = { 'agents/a.md': 'agent a', 'skills/s/SKILL.md': 'skill s', 'skills/s/scripts/run.sh': '#!/bin/sh\necho hi\n' };
+    const files = {
+      'agents/a.md': 'agent a',
+      'skills/s/SKILL.md': 'skill s',
+      'skills/s/scripts/run.sh': '#!/bin/sh\necho hi\n',
+      'commands/test.md': '---\ndescription: bundled test\n---\nRun tests.\n',
+      'plugins/now/plugin.js': "module.exports = { name: 'now', tools: {} };\n",
+    };
     const reads = [];
     const read = (key) => { reads.push(key); const k = key.replace(/^examples\//, ''); return k in files ? Buffer.from(files[k]) : null; };
     const manifest = {
       hash: 'a'.repeat(64),
       files: [
         { path: 'agents/a.md' }, { path: 'skills/s/SKILL.md' }, { path: 'skills/s/scripts/run.sh', exec: true },
+        { path: 'commands/test.md' }, { path: 'plugins/now/plugin.js' },
         { path: '../evil.txt' }, { path: '/abs.txt' },       // must be ignored, never written
       ],
     };
@@ -99,6 +109,8 @@ test('unpack: writes the embedded files once, keeps modes, skips unsafe paths, p
     assert.equal(out, path.join(dest, 'a'.repeat(12)));
     assert.equal(fs.readFileSync(path.join(out, 'agents', 'a.md'), 'utf8'), 'agent a');
     assert.equal(fs.readFileSync(path.join(out, 'skills', 's', 'SKILL.md'), 'utf8'), 'skill s');
+    assert.match(fs.readFileSync(path.join(out, 'commands', 'test.md'), 'utf8'), /bundled test/);
+    assert.equal(fs.readFileSync(path.join(out, 'plugins', 'now', 'plugin.js'), 'utf8'), files['plugins/now/plugin.js']);
     assert.ok(fs.existsSync(path.join(out, '.complete')));
     if (process.platform !== 'win32') {
       assert.ok(fs.statSync(path.join(out, 'skills', 's', 'scripts', 'run.sh')).mode & 0o100, 'executable bit is kept');
@@ -122,17 +134,55 @@ test('unpack: writes the embedded files once, keeps modes, skips unsafe paths, p
   } finally { fs.rmSync(dest, { recursive: true, force: true }); }
 });
 
-test('unpacked layout is scannable by the normal agent and skill loaders', () => {
-  // What a single executable ends up with: the same agents/ + skills/ tree, scanned like any other root.
+test('unpacked layout is scannable by the normal agent, skill, command and plugin loaders', () => {
   const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'bundled-scan-'));
   try {
     const all = [];
-    (function walk(d) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else all.push(path.relative(EXAMPLES, f).split(path.sep).join('/')); } })(path.join(EXAMPLES, 'agents'));
-    (function walk(d) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else all.push(path.relative(EXAMPLES, f).split(path.sep).join('/')); } })(path.join(EXAMPLES, 'skills'));
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const f = path.join(d, e.name);
+        if (e.isDirectory()) walk(f); else all.push(path.relative(EXAMPLES, f).split(path.sep).join('/'));
+      }
+    };
+    for (const sub of ['agents', 'skills', 'commands', 'plugins']) walk(path.join(EXAMPLES, sub));
     const out = bundled.unpack({ hash: 'd'.repeat(64), files: all.map((p) => ({ path: p })) }, (k) => fs.readFileSync(path.join(ROOT, k)), dest);
     assert.ok(fs.existsSync(path.join(out, 'agents', 'reviewer.md')));
     assert.ok(fs.existsSync(path.join(out, 'skills', 'commit-style', 'SKILL.md')));
+    assert.ok(fs.existsSync(path.join(out, 'commands', 'test.md')));
+    assert.ok(fs.existsSync(path.join(out, 'plugins', 'now', 'plugin.js')));
     const { meta } = agents.parseFrontmatter(fs.readFileSync(path.join(out, 'agents', 'security-agent.md'), 'utf8'));
     assert.equal(typeof meta.description, 'string');
   } finally { fs.rmSync(dest, { recursive: true, force: true }); }
+});
+
+test('unpacked commands and plugins load through the normal loaders', async () => {
+  const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'bundled-load-'));
+  plugins.reset();
+  hooks.reset();
+  try {
+    const all = [];
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const f = path.join(d, e.name);
+        if (e.isDirectory()) walk(f); else all.push(path.relative(EXAMPLES, f).split(path.sep).join('/'));
+      }
+    };
+    for (const sub of ['agents', 'skills', 'commands', 'plugins']) walk(path.join(EXAMPLES, sub));
+    const out = bundled.unpack({ hash: 'e'.repeat(64), files: all.map((p) => ({ path: p })) }, (k) => fs.readFileSync(path.join(ROOT, k)), dest);
+    const base = ctx.cfg.loadConfig();
+    const cmds = commands.loadCommands({ ...base, commands: { paths: [path.join(out, 'commands')] } });
+    assert.ok(cmds.test, 'the unpacked test command should load');
+
+    fs.rmSync(path.join(ctx.studioDir, 'plugins'), { recursive: true, force: true });
+    const status = await plugins.load({ ...base, plugins: { enabled: true, paths: [path.join(out, 'plugins')] } });
+    assert.equal(status.errors.length, 0, JSON.stringify(status.errors));
+    assert.ok(plugins.isTool('now_now'));
+    assert.ok(plugins.isTool('json_format'));
+    const r = await plugins.callTool('json_format', { text: '{"b":2,"a":1}', sort_keys: true, indent: 0 });
+    assert.equal(r.output, '{"a":1,"b":2}');
+  } finally {
+    plugins.reset();
+    hooks.reset();
+    fs.rmSync(dest, { recursive: true, force: true });
+  }
 });
