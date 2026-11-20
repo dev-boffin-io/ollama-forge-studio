@@ -6,7 +6,14 @@ const path = require('node:path');
 const { setup } = require('./helpers');
 
 const ctx = setup();
+const ROOT = path.resolve(__dirname, '..');
 const commands = require('../lib/commands');
+
+const withBundled = (fn) => {
+  const prev = process.env.OLLAMA_STUDIO_NO_BUNDLED;
+  delete process.env.OLLAMA_STUDIO_NO_BUNDLED;
+  try { return fn(); } finally { if (prev === undefined) delete process.env.OLLAMA_STUDIO_NO_BUNDLED; else process.env.OLLAMA_STUDIO_NO_BUNDLED = prev; }
+};
 
 test('built-in commands are always available', () => {
   const all = commands.loadCommands();
@@ -57,4 +64,35 @@ test('expand: invalid command file names are skipped', () => {
   const dir = path.join(ctx.studioDir, 'commands');
   fs.writeFileSync(path.join(dir, 'bad name.md'), 'nope', 'utf8');
   assert.ok(!commands.loadCommands()['bad name']);
+});
+
+test('bundled commands load from examples/commands and user files override them', () => {
+  withBundled(() => {
+    const all = commands.loadCommands();
+    assert.ok(all.test, 'examples/commands/test.md should be a default command');
+    assert.match(all.test.template, /Run the project's tests/);
+
+    const dir = path.join(ctx.studioDir, 'commands');
+    fs.writeFileSync(path.join(dir, 'test.md'), '---\ndescription: mine\n---\nMine $ARGUMENTS\n', 'utf8');
+    const overridden = commands.loadCommands();
+    assert.equal(overridden.test.description, 'mine');
+    assert.equal(overridden.test.template, 'Mine $ARGUMENTS');
+  });
+});
+
+test('config.commands.paths loads opt-in extras commands, including the /review override', async () => {
+  const base = ctx.cfg.loadConfig();
+  assert.equal(commands.loadCommands(base).verify, undefined, 'extras must be opt-in');
+  assert.equal(commands.loadCommands(base).review.builtin, true, 'built-in review stays by default');
+
+  const cfg = { ...base, commands: { paths: [path.join(ROOT, 'extras', 'commands')] } };
+  const all = commands.loadCommands(cfg);
+  assert.ok(all.verify);
+  assert.equal(all.review.builtin, false);
+  assert.match(all.review.description, /Deep opt-in review/);
+
+  const r = await commands.expand('/verify focus on tests', cfg);
+  assert.equal(r.command.name, 'verify');
+  assert.match(r.text, /focus on tests/);
+  assert.ok(!r.text.includes('$ARGUMENTS'));
 });
