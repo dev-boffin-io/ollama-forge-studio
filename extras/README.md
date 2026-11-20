@@ -5,30 +5,35 @@ prompt tokens on every request). Things that are useful to *some* people live he
 
 | Path | What | Needs |
 |---|---|---|
+| `agents/release-manager` | version bumps, changelog/release notes, tags and release verification | – |
+| `agents/support-triage` | logs / stack traces → reproduction, scope and ranked root causes | – |
+| `commands/review.md` | deep opt-in review that overrides the built-in `/review` | – |
+| `commands/verify.md` | discover and run the project's real checks, then report gaps | – |
 | `skills/api-designer` | REST / GraphQL / JSON-RPC design with a validated contract | – |
 | `skills/docker-expert` | Dockerfile + compose hardening, verified by building | Docker (optional, for verifying) |
 | `skills/database-migration` | safe migrations, expand→contract, rollback, dry run | the project's migration tool |
-| `skills/i18n-l10n` | extract strings, plurals, locale-completeness check | – |
-| `skills/bug-triage` | log / stack trace → evidence-based root cause | – |
 | `plugins/http-request` | tool `http_request`: API client with secret injection, private-network guard, size caps | – (Node 18+) |
-| `plugins/ast-search` | tool `ast_search`: structural code search | the external `ast-grep` binary (`npm i -g @ast-grep/cli`) |
+| `plugins/text-search` | tool `text_search`: pure Node.js regex/text file search | – (Node 18+) |
+
+`bug-triage` and `i18n-l10n` are now bundled defaults in `examples/skills/`.
 
 ## Enable (config.json, global or per project)
 
-Use absolute paths to this folder (or copy what you want into `~/.config/ollama-studio/skills/` / `<project>/.studio/skills/`,
-resp. `.../plugins/`):
+Use absolute paths to this folder (or copy what you want into the matching global / project folders):
 
 ```json
 {
-  "skills":  { "paths": ["/path/to/ollama-forge-studio/extras/skills"] },
-  "plugins": { "paths": ["/path/to/ollama-forge-studio/extras/plugins"] },
-  "permission": { "plugin": { "ast_search": "allow" } }
+  "agents":   { "paths": ["/path/to/ollama-forge-studio/extras/agents"] },
+  "commands": { "paths": ["/path/to/ollama-forge-studio/extras/commands"] },
+  "skills":   { "paths": ["/path/to/ollama-forge-studio/extras/skills"] },
+  "plugins":  { "paths": ["/path/to/ollama-forge-studio/extras/plugins"] },
+  "permission": { "plugin": { "text_search": "allow" } }
 }
 ```
 
 Pick single items by pointing a path at a folder that contains only those (e.g. symlink the ones you want into one folder).
 Reload plugins with `POST /api/plugins/reload`. `extras/` is **not** embedded in the single-file executable (opt-in by design):
-with the binary, copy the folders you want into the global `skills/` or `plugins/` directory.
+with the binary, copy the folders you want into the global `agents/`, `commands/`, `skills/` or `plugins/` directory.
 
 ## `http_request` plugin
 
@@ -47,7 +52,7 @@ with the binary, copy the folders you want into the global `skills/` or `plugins
 - Plugin tools ask by default (`plugin` permission, the pattern is the tool name only, so per-host rules are done by the
   plugin's own config above). **It runs in the studio process, not in the Docker sandbox.**
 
-## `ast_search` plugin
+## `text_search` plugin
 
-Registers nothing (and logs a warning) when `ast-grep` is not installed. Read-only. Pattern examples:
-`fetchUser($ID)` (ts), `class $C extends Base { $$$BODY }`, `console.log($$$ARGS)`.
+Read-only, zero external binaries. Configure it with `"textSearch": { "maxBytes": 2000000, "ignoreFolders": ["dist"] }`.
+Pattern examples: `fetchUser`, `fetchUser\\(\\d+\\)` with `"regex": true`, `TODO|FIXME` with `"regex": true`.

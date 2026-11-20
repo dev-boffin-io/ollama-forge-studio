@@ -179,8 +179,8 @@ Switch primary agents from the dropdown in the chat header. Primary agents can d
 
 **Bundled agents:** every `examples/agents/*.md` ships with the app
 and is available out of the box — also inside the single-file executable. They are the *lowest* layer
-(bundled < global < project), so a file with the same name in your own folders replaces the bundled one.
-Set `OLLAMA_STUDIO_NO_BUNDLED=1` to switch the bundled agents *and* skills off.
+(bundled < `agents.paths` < global < project), so a file with the same name in your own folders replaces the bundled one.
+Set `OLLAMA_STUDIO_NO_BUNDLED=1` to switch the bundled agents, skills, commands and plugins off.
 
 | Bundled agent           | Access                                                                  | Job |
 |-------------------------|-------------------------------------------------------------------------|-----|
@@ -194,7 +194,8 @@ Set `OLLAMA_STUDIO_NO_BUNDLED=1` to switch the bundled agents *and* skills off.
 
 The four newest are `mode: all` (pick them in the dropdown or delegate with `task`) with `auto: false`, so they do not
 crowd the [auto mode](#auto-mode) rotation. Any agent can run on its own model: add `model: provider/model` to its
-frontmatter (e.g. a cheap model for `doc-writer`, a strong one for `architect`).
+frontmatter (e.g. a cheap model for `doc-writer`, a strong one for `architect`). Opt-in `extras/agents/` adds
+`release-manager` and `support-triage`; see [Extras](#extras-optional-off-by-default).
 
 ### Auto mode
 
@@ -285,9 +286,10 @@ which asks you to approve switching to `build`; the session then continues as `b
 
 ## Slash commands
 
-`/init` (write AGENTS.md), `/review [commit|branch]`, and your own in `~/.studio/<project>/commands/<name>.md` or
-`~/.config/ollama-studio/commands/` (`$ARGUMENTS`, `$1..$9`, `@path` inlines a file, optional `agent:`).
-Type `/` in the prompt box for hints. See `examples/commands/test.md`.
+`/init` (write AGENTS.md), `/review [commit|branch]`, the bundled `examples/commands/test.md`, plus `commands.paths`,
+`~/.studio/<project>/commands/<name>.md` and `~/.config/ollama-studio/commands/` (`$ARGUMENTS`, `$1..$9`, `@path` inlines a
+file, optional `agent:`). Bundled commands are loaded below user commands; the opt-in `extras/commands/` adds a deeper
+`/review` override and `/verify`. Type `/` in the prompt box for hints.
 
 ## Undo / Redo
 
@@ -387,9 +389,11 @@ Their tools appear as `<server>_<tool>` and **ask permission by default** (`"mcp
 
 ## Plugins
 
-Plugins add tools, lifecycle hooks and HTTP routes without changing the core. They are loaded from the global
-`plugins/` folder, the project's `.studio/plugins/`, `.claude/plugins/` or `.agents/plugins/`, the project data folder,
-and `config.plugins.paths`. Disable all of them with `"plugins": { "enabled": false }`.
+Plugins add tools, lifecycle hooks and HTTP routes without changing the core. They are loaded from the bundled
+`examples/plugins/` folder (lowest priority), the global `plugins/` folder, the project's `.studio/plugins/`,
+`.claude/plugins/` or `.agents/plugins/`, the project data folder, and `config.plugins.paths`. Disable all of them with
+`"plugins": { "enabled": false }`. Two read-only examples ship with the studio: `now_now` (timestamps and timezones) and
+`json_format` (JSON validation and formatting).
 
 A plugin is a CommonJS file, a folder with `index.js` / `plugin.js`, or a folder with `plugin.json` (optionally with a
 `main` entry). Plugin tools are always namespaced, so a `docker` plugin with a `ps` tool becomes `docker_ps`:
@@ -492,20 +496,22 @@ Folders with a `SKILL.md` (`name`, `description` frontmatter) in `~/.studio/<pro
 or the global equivalents (`~/.config/ollama-studio/skills`, `~/.claude/skills`, `~/.agents/skills`, `config.skills.paths`).
 The model sees the list and loads one on demand with the `skill` tool.
 
-**Bundled skills:** every folder in `examples/skills/` (`commit-style`, `doc-generator`, `git-workflow`, `refactor-expert`,
-`test-and-verify`, `project-onboarding`, `dependency-upgrade`, `release-notes`) is loaded by default and is overridden by a skill of the same `name` in any of the folders above.
+**Bundled skills:** every folder in `examples/skills/` (`bug-triage`, `commit-style`, `dependency-upgrade`, `doc-generator`,
+`git-workflow`, `i18n-l10n`, `project-onboarding`, `refactor-expert`, `release-notes`, `test-and-verify`) is loaded by default and
+is overridden by a skill of the same `name` in any of the folders above.
 In the single-file executable they are embedded at build time (`npm run build`) and unpacked once to
-`~/.config/ollama-studio/bundled/<hash>/`, so a skill's `scripts/` and `reference/` files still have a real path.
-To ship another default agent or skill, drop it into `examples/agents/` or `examples/skills/` and rebuild.
+`~/.config/ollama-studio/bundled/<hash>/`, so a skill's `scripts/` and `reference/` files and plugin entrypoints still have
+a real path. Bundled commands and plugins live in `examples/commands/` and `examples/plugins/` and follow the same rules.
+To ship another default agent, skill, command or plugin, drop it into the matching `examples/` folder and rebuild.
 
 ## Extras (optional, off by default)
 
 `extras/` holds things that are useful to some people but would cost prompt tokens for everyone if they shipped as defaults:
-skills `api-designer`, `docker-expert`, `database-migration`, `i18n-l10n`, `bug-triage` and the plugins `http-request`
-(tool `http_request`: API client with env-based secret injection and a private-network guard) and `ast-search` (tool
-`ast_search`: structural code search, needs the external `ast-grep` binary). They are enabled with
-`skills.paths` / `plugins.paths` in the config; see [`extras/README.md`](extras/README.md). They are not embedded in the
-single-file executable.
+agents `release-manager` and `support-triage`; commands `/review` (deep override) and `/verify`; skills `api-designer`,
+`docker-expert`, `database-migration`; and the plugins `http-request` (tool `http_request`: API client with env-based secret
+injection and a private-network guard) and `text-search` (tool `text_search`: pure Node.js regex/text search, no external
+binaries). They are enabled with `agents.paths`, `commands.paths`, `skills.paths` and
+`plugins.paths` in the config; see [`extras/README.md`](extras/README.md). They are not embedded in the single-file executable.
 
 ## Web tools
 
@@ -655,8 +661,8 @@ lib/journal.js       undo / redo
 lib/commands.js      slash commands
 lib/sessions.js      persistent sessions (+ fork, export)
 lib/agents.js        built-in + markdown agents, system prompt, AGENTS.md
-lib/bundled.js       bundled layer: examples/{agents,skills} as defaults (source + single executable)
-extras/              opt-in skills + plugins (api-designer, docker-expert, http_request, ast_search …), see extras/README.md
+lib/bundled.js       bundled layer: examples/{agents,skills,commands,plugins} as defaults (source + single executable)
+extras/              opt-in agents + commands + skills + plugins, see extras/README.md
 lib/auto.js          auto mode: per-message router (agent hand-over lives in lib/tools.js + lib/agent.js)
 lib/tools.js         tool schemas, permissions, bash, plugin tool dispatch, hook calls
 lib/agent.js         agent loop, subagents, compaction, lifecycle hooks
