@@ -13,6 +13,9 @@
   },
   "lsp": { "typescript": { "disabled": false } },
   "websearch": { "provider": "exa" },
+  "agents": { "paths": [] },
+  "commands": { "paths": [] },
+  "skills": { "paths": [] },
   "hooks": {},
   "plugins": { "enabled": true, "paths": [] },
   "sandbox": {

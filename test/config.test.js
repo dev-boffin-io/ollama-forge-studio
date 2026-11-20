@@ -48,10 +48,13 @@ test('loadConfig: defaults, global and local layers', () => {
   assert.equal(defaults.permission.edit, 'allow');
   assert.deepEqual(defaults.providers, {});
   assert.deepEqual(defaults.mcp, {});
+  assert.deepEqual(defaults.agents.paths, []);
+  assert.deepEqual(defaults.commands.paths, []);
+  assert.deepEqual(defaults.skills.paths, []);
   assert.ok(typeof defaults.systemPrompt === 'string' && defaults.systemPrompt.length > 0);
 
   // per-project config wins over the global one
-  const local = { model: 'local-model', temperature: 0.9, permission: { bash: { 'npm test*': 'allow' } }, providers: { lp: { type: 'openai', endpoint: 'https://lp.example/v1' } } };
+  const local = { model: 'local-model', temperature: 0.9, permission: { bash: { 'npm test*': 'allow' } }, providers: { lp: { type: 'openai', endpoint: 'https://lp.example/v1' } }, agents: { paths: ['/tmp/extra-agents'] }, commands: { paths: ['/tmp/extra-commands'] } };
   fs.writeFileSync(path.join(ctx.studioDir, 'config.json'), JSON.stringify(local), 'utf8');
   const merged = cfg.loadConfig();
   assert.equal(merged.model, 'local-model');
@@ -59,6 +62,8 @@ test('loadConfig: defaults, global and local layers', () => {
   assert.deepEqual(merged.permission.bash, { 'npm test*': 'allow' });
   assert.equal(merged.permission.edit, 'allow');        // untouched keys keep their defaults
   assert.ok(merged.providers.lp);
+  assert.deepEqual(merged.agents.paths, ['/tmp/extra-agents']);
+  assert.deepEqual(merged.commands.paths, ['/tmp/extra-commands']);
 
   // without a local file the global config.json applies (and is absent in a fresh checkout — it is gitignored)
   fs.rmSync(path.join(ctx.studioDir, 'config.json'));
