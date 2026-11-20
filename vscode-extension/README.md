@@ -6,19 +6,28 @@ Docker sandbox all behave exactly as they do in the browser UI.
 
 ## Features
 
-- Chat panel beside the editor (`Ollama Studio: Open Chat`).
+- `Ollama Studio: Open Chat` is available from the editor top bar and Command Palette; it opens or reveals the chat beside
+  the editor.
+- An **Ollama Studio** icon in the right side of the status bar opens the same chat, like Copilot.
+- An **Ollama Studio** activity-bar container adds a **Chats** navigator and a compact **Chat** view in the left sidebar.
+- The chat header and the Chats navigator both switch between chats in the current folder; changing folders clears the
+  active chat so chats from another folder are not reused.
+- The last focused text file is shown in the chat header and attached automatically; click the file chip or run
+  `Ollama Studio: Attach/Detach Active File` to toggle it. The selected lines (or the cursor line) are sent as context
+  with each message.
 - Agent and model pickers populated from the running server.
 - Streaming tokens, thinking output, tool calls/results and subagent events.
 - Permission prompts (once / always / reject) and agent questions inside VS Code.
 - `Ollama Studio: Send Selection to Chat` (also in the editor context menu) inserts the current selection or line as a
-  fenced code block.
+  fenced code block into every open chat view.
 - Starts `server.js` automatically if no studio is running, and stops only the server it started.
 
 ## Run from this repository
 
 1. Open the repository in VS Code.
 2. Press `F5` (Run Extension). A second VS Code window opens with the extension loaded.
-3. Run `Ollama Studio: Open Chat` from the Command Palette.
+3. Use the Ollama Studio icon in the status bar or editor top bar, or run `Ollama Studio: Open Chat` from the Command Palette.
+4. Open the **Ollama Studio** icon in the activity bar to use the sidebar Chat and Chats views.
 
 The extension looks for `../server.js` next to the extension folder. If you use the single-file executable instead, set
 `ollamaStudio.serverPath` to that executable.
@@ -44,4 +53,5 @@ The folder is a complete VS Code extension (no build step). To install it locall
 ln -s "$PWD/vscode-extension" "$HOME/.vscode/extensions/ollama-forge-studio-0.1.0"
 ```
 
-Then reload VS Code and run `Ollama Studio: Open Chat`.
+Then reload VS Code, use the editor top-bar chat icon, and open the Ollama Studio activity-bar view for the sidebar
+navigator.

@@ -20,19 +20,65 @@
     "code"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:ollamaStudio.openChat",
+    "onCommand:ollamaStudio.newChat",
+    "onCommand:ollamaStudio.refreshSessions",
+    "onCommand:ollamaStudio.toggleActiveFile",
     "onCommand:ollamaStudio.sendSelection",
     "onCommand:ollamaStudio.startServer",
     "onCommand:ollamaStudio.stopServer",
     "onCommand:ollamaStudio.openSettings",
-    "onWebviewPanel:ollamaStudio.chat"
+    "onView:ollamaStudio.chatView",
+    "onView:ollamaStudio.sessionsView"
   ],
   "main": "./extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ollamaStudioExplorer",
+          "title": "Ollama Studio",
+          "icon": "$(robot)"
+        }
+      ]
+    },
+    "views": {
+      "ollamaStudioExplorer": [
+        {
+          "type": "webview",
+          "id": "ollamaStudio.sessionsView",
+          "name": "Chats",
+          "contextualTitle": "Ollama Studio Chats"
+        },
+        {
+          "type": "webview",
+          "id": "ollamaStudio.chatView",
+          "name": "Chat",
+          "contextualTitle": "Ollama Studio Chat"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "ollamaStudio.openChat",
-        "title": "Ollama Studio: Open Chat"
+        "title": "Ollama Studio: Open Chat",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "ollamaStudio.newChat",
+        "title": "New Chat",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ollamaStudio.refreshSessions",
+        "title": "Refresh Chats",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ollamaStudio.toggleActiveFile",
+        "title": "Ollama Studio: Attach/Detach Active File",
+        "icon": "$(file-code)"
       },
       {
         "command": "ollamaStudio.sendSelection",
@@ -52,11 +98,40 @@
       }
     ],
     "menus": {
+      "editor/title": [
+        {
+          "command": "ollamaStudio.openChat",
+          "group": "navigation@90",
+          "when": "editorIsOpen"
+        },
+        {
+          "command": "ollamaStudio.toggleActiveFile",
+          "group": "navigation@91",
+          "when": "editorIsOpen"
+        }
+      ],
       "editor/context": [
         {
           "command": "ollamaStudio.sendSelection",
           "group": "navigation@90",
           "when": "editorHasSelection"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "ollamaStudio.newChat",
+          "when": "view == ollamaStudio.sessionsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ollamaStudio.refreshSessions",
+          "when": "view == ollamaStudio.sessionsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ollamaStudio.toggleActiveFile",
+          "when": "view == ollamaStudio.chatView",
+          "group": "navigation@1"
         }
       ]
     },
