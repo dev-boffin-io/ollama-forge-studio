@@ -67,3 +67,28 @@ test('miniDiff reports the changed region', () => {
   const same = miniDiff('a\nb', 'a\nb');
   assert.equal(same.additions + same.deletions, 0);
 });
+
+test('not-found error shows the closest ACTUAL region so the model can copy it', () => {
+  const f = 'function a(){\n  const x = 1;\n  return x;\n}\nfunction b(){\n  const y = 2;\n  return y+1;\n}\n';
+  assert.throws(() => replace(f, 'const yy = 2;\n  return computeSomething(y);', 'x'), (e) => /Closest match is at lines 5-8/.test(e.message) && /6:   const y = 2;/.test(e.message));
+});
+
+test('double-escaped old_string/new_string (literal backslash-n) still match', () => {
+  const f = 'if (a) {\n  run();\n}\n';
+  const r = replace(f, 'if (a) {\\n  run();\\n}', 'if (b) {\\n  go();\\n}');
+  assert.equal(r.content, 'if (b) {\n  go();\n}\n');
+});
+
+test('CRLF files: edits match and line endings are preserved', () => {
+  const r = replace('a\r\nb\r\nc\r\n', 'b\nc', 'B\nC');
+  assert.equal(r.content, 'a\r\nB\r\nC\r\n');
+});
+
+test('replaceLines: range edit, expect guard, bounds', () => {
+  const { replaceLines } = require('../lib/edit-match');
+  const f = 'one\ntwo\nthree\n';
+  assert.equal(replaceLines(f, 2, 2, 'TWO', 'two').content, 'one\nTWO\nthree\n');
+  assert.equal(replaceLines(f, 2, 3, '', null).content, 'one\n');
+  assert.throws(() => replaceLines(f, 2, 2, 'x', 'nope'), /does not match expect_first_line/);
+  assert.throws(() => replaceLines(f, 9, 9, 'x'), /Invalid line range/);
+});

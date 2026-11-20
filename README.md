@@ -252,6 +252,12 @@ or crash never loses work. Reopen the studio in the same directory and the sessi
 `question` (ask you a question, with options), `plan_exit` (plan agent only), `webfetch`, `websearch`, `skill`, `lsp`,
 any MCP tools, and plugin tools (`<plugin>_<tool>`). Plugin and MCP tools ask for permission by default.
 
+- **Edit recovery & loop breaker**: a failed `old_string` now returns the *actual* closest lines (numbered like `read_file`) so the model can copy them;
+  double-escaped `\\n` and CRLF files are handled; `edit_file` also accepts `start_line` / `end_line` (+ `expect_first_line`) so no `old_string` is needed.
+  After 2 failed edits on one file the error tells the model to re-read and switch to a line-range edit. Identical calls ×5, or the same tool failing ×3
+  in a row (even with different inputs), are refused outright (grants don't override this); a user-rejected action is remembered and never re-asked.
+  **Read-before-edit**: `edit_file`/`multi_edit` are refused unless the file's text is in the model's *live* context (an un-pruned `read_file`, or its own successful write/edit);
+  context pruning now keeps the latest `read_file` output of every file that has not changed since (≤12k chars each, ≤36k total).
 - **Fuzzy `edit_file`**: tolerates wrong indentation/whitespace, copied `12:` line-number prefixes and
   small drift in the middle of a block (anchor lines + similarity), with `replace_all` and a "matched span too big" guard.
   Results include a small diff.

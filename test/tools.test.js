@@ -176,3 +176,83 @@ test('json_edit get/set/delete with indentation and arrays', async () => {
   await assert.rejects(() => tools.executeTool('json_edit', { path: 'c.json', op: 'get', key: 'missing' }, { agent: { name: 'build' }, config: cfg.loadConfig(), session: { id: 's1', messages: [], journal: [], turn: 0 }, root: { journal: [], turn: 0 }, inherited: [], emit: () => {}, askPermission: async () => 'once', askUser: async () => '' }), /does not exist/);
 });
 
+
+/* ---------- loop breaker / edit recovery ---------- */
+
+const mkCtx = (messages = [], extra = {}) => ({ agent: { name: 'build' }, config: ctx.cfg.loadConfig(), session: { id: 'loop', messages, journal: [], turn: 0 }, root: { journal: [], turn: 0 }, inherited: [], emit: () => {}, askPermission: async () => 'once', askUser: async () => '', ...extra });
+const callMsg = (id, name, args) => ({ role: 'assistant', content: '', tool_calls: [{ id, function: { name, arguments: args } }] });
+const errMsg = (id, name) => ({ role: 'tool', tool_name: name, tool_call_id: id, content: JSON.stringify({ error: 'boom' }) });
+
+test('doom loop: identical input 5x in a row is refused even if the user granted everything', async () => {
+  const args = { command: 'echo hi' };
+  const msgs = [];
+  for (let i = 1; i <= 5; i++) { msgs.push(callMsg('c' + i, 'bash', args)); if (i < 5) msgs.push(errMsg('c' + i, 'bash')); }
+  await assert.rejects(() => tools.executeTool('bash', args, mkCtx(msgs, { askPermission: async () => 'always' })), /LOOP DETECTED/);
+});
+
+test('doom loop: same tool failing 3x with DIFFERENT inputs is refused with recovery steps', async () => {
+  const msgs = [];
+  for (let i = 1; i <= 3; i++) { msgs.push(callMsg('e' + i, 'edit_file', { path: 'x.js', old_string: 'v' + i, new_string: 'n' })); msgs.push(errMsg('e' + i, 'edit_file')); }
+  msgs.push(callMsg('e4', 'edit_file', { path: 'x.js', old_string: 'v4', new_string: 'n' }));
+  await assert.rejects(() => tools.executeTool('edit_file', { path: 'x.js', old_string: 'v4', new_string: 'n' }, mkCtx(msgs)), /has failed 3 times[\s\S]*read_file[\s\S]*start_line/);
+});
+
+test('doom loop: an intervening read_file resets the failure streak', async () => {
+  const msgs = [];
+  for (let i = 1; i <= 3; i++) { msgs.push(callMsg('e' + i, 'edit_file', { path: 'nope.js', old_string: 'v' + i, new_string: 'n' })); msgs.push(errMsg('e' + i, 'edit_file')); }
+  msgs.push(callMsg('r1', 'read_file', { path: 'nope.js' }));
+  msgs.push({ role: 'tool', tool_name: 'read_file', tool_call_id: 'r1', content: JSON.stringify({ path: 'nope.js' }) });
+  msgs.push(callMsg('e4', 'edit_file', { path: 'nope.js', old_string: 'v4', new_string: 'n' }));
+  await assert.rejects(() => tools.executeTool('edit_file', { path: 'nope.js', old_string: 'v4', new_string: 'n' }, mkCtx(msgs)), (e) => !/LOOP DETECTED/.test(e.message));
+});
+
+test('permission: a rejected action is remembered and not asked again', async () => {
+  let asked = 0;
+  const c = mkCtx([], { askPermission: async () => { asked++; return 'reject'; } });
+  const args = { command: 'rm -rf some-dir-that-does-not-exist-xyz' };
+  await assert.rejects(() => tools.executeTool('bash', args, c), /permission rejected by the user. Do NOT retry/);
+  await assert.rejects(() => tools.executeTool('bash', args, c), /already rejected/);
+  assert.equal(asked, 1);
+});
+
+test('edit_file: start_line/end_line range edit works and repeated failures escalate', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const ws = require('../lib/workspace');
+  fs.writeFileSync(ws.safeResolve('range-edit.txt'), 'a\nb\nc\n');
+  const c = mkCtx();
+  const ok = await tools.executeTool('edit_file', { path: 'range-edit.txt', start_line: 2, end_line: 2, expect_first_line: 'b', new_string: 'B' }, c);
+  assert.equal(ok.ok, true);
+  assert.equal(fs.readFileSync(ws.safeResolve('range-edit.txt'), 'utf8'), 'a\nB\nc\n');
+  await assert.rejects(() => tools.executeTool('edit_file', { path: 'range-edit.txt', old_string: 'zzz-1', new_string: 'x' }, c), /Could not find/);
+  await assert.rejects(() => tools.executeTool('edit_file', { path: 'range-edit.txt', old_string: 'zzz-2', new_string: 'x' }, c), /failed 2 times in a row[\s\S]*start_line/);
+});
+
+/* ---------- read-before-edit ---------- */
+
+test('edit_file: refused when the file is not in live context, allowed after a live read_file', async () => {
+  const fs = require('node:fs'); const ws = require('../lib/workspace');
+  fs.writeFileSync(ws.safeResolve('rbe.txt'), 'x\ny\n');
+  const other = [callMsg('o1', 'read_file', { path: 'other.txt' }), { role: 'tool', tool_name: 'read_file', tool_call_id: 'o1', content: '{}' }];
+  await assert.rejects(() => tools.executeTool('edit_file', { path: 'rbe.txt', old_string: 'x', new_string: 'X' }, mkCtx(other.slice())), /Read the file first/);
+  const pruned = [callMsg('r1', 'read_file', { path: 'rbe.txt' }), { role: 'tool', tool_name: 'read_file', tool_call_id: 'r1', content: '{"note":"pruned"}', pruned: true }];
+  await assert.rejects(() => tools.executeTool('edit_file', { path: './rbe.txt', old_string: 'x', new_string: 'X' }, mkCtx(pruned.slice())), /Read the file first/);
+  const live = [callMsg('r2', 'read_file', { path: 'rbe.txt' }), { role: 'tool', tool_name: 'read_file', tool_call_id: 'r2', content: '{"content":"1: x"}' }];
+  const ok = await tools.executeTool('edit_file', { path: 'rbe.txt', old_string: 'x', new_string: 'X' }, mkCtx(live));
+  assert.equal(ok.ok, true);
+});
+
+test('pruneToolOutputs keeps the latest unchanged read_file per file, prunes stale/changed ones', () => {
+  const { pruneToolOutputs } = require('../lib/agent');
+  const big = (t) => JSON.stringify({ content: t.repeat(800) });
+  const m = [
+    callMsg('a', 'read_file', { path: 'keep.js' }), { role: 'tool', tool_call_id: 'a', content: big('k') },
+    callMsg('b', 'read_file', { path: 'changed.js' }), { role: 'tool', tool_call_id: 'b', content: big('c') },
+    callMsg('c', 'edit_file', { path: 'changed.js' }), { role: 'tool', tool_call_id: 'c', content: big('d') },
+    callMsg('d', 'bash', { command: 'ls' }), { role: 'tool', tool_call_id: 'd', content: big('z') },
+    { role: 'user', content: 'x'.repeat(4000) },
+  ];
+  pruneToolOutputs(m, 100);
+  assert.equal(!!m[1].pruned, false);   // kept
+  assert.equal(!!m[3].pruned, true);    // file changed afterwards
+  assert.equal(!!m[7].pruned, true);    // unrelated big output
+});
