@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   replace, miniDiff, unifiedDiff,
-  fuzzyLineMatch, rankMatches, indentationFlexible, whitespaceNormalized,
+  fuzzyLineMatch, rankMatches, scoreMatch, indentationFlexible, whitespaceNormalized,
 } = require('../lib/edit-match');
 
 test('exact match replaces the region', () => {
@@ -67,6 +67,19 @@ test('fuzzyLineMatch finds near-identical lines using Levenshtein similarity', (
   const r = replace(content, find, 'const value = compute(2);');
   assert.equal(r.via, 'fuzzyLineMatch');
   assert.equal(r.content, 'const value = compute(2);\nconst other = 2;\n');
+});
+
+test('fuzzyLineMatch stays responsive on very long lines', { timeout: 3000 }, () => {
+  const long = `${'x'.repeat(1900)}compute(1);`;
+  const find = `${'x'.repeat(1900)}comput(1);`;
+  const content = `${long}\nconst other = 2;\n`;
+  assert.deepEqual([...fuzzyLineMatch(content, find)], [long]);
+});
+
+test('long-line similarity still notices differences away from the ends', () => {
+  const a = `${'x'.repeat(1000)}alpha${'y'.repeat(1000)}`;
+  const b = `${'x'.repeat(1000)}beta${'y'.repeat(1000)}`;
+  assert.ok(scoreMatch(a, b) < 1);
 });
 
 test('refuses a block match whose middle line drifted too far', () => {
