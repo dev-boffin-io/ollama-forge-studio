@@ -231,10 +231,11 @@ test('end to end: a failing edit is repaired from the verify output, and a regre
   const fake = await fakeOllama((req) => {
     const results = req.messages.filter((m) => m.role === 'tool').map((m) => m.content);
     const regressionNotice = req.messages.some((m) => m.role === 'user' && /final verification\]/.test(m.content || ''));
-    if (results.length === 0) return writeCall(src('a - b', 'x * 2'));                       // bug 1: caught at once by the related test
-    if (results.length === 1) return writeCall(src('a + b', 'x * 3'));                       // fixes add, but breaks double (a regression elsewhere)
+    if (results.length === 0) return { tool_calls: [{ function: { name: 'read_file', arguments: { path: 'lib/e2e-math.js' } } }] };
+    if (results.length === 1) return writeCall(src('a - b', 'x * 2'));                       // bug 1: caught at once by the related test
+    if (results.length === 2) return writeCall(src('a + b', 'x * 3'));                       // fixes add, but breaks double (a regression elsewhere)
     if (!regressionNotice) return { content: 'Finished.' };                                  // claims done -> the final suite catches double
-    if (results.length === 2) return writeCall(src('a + b', 'x * 2'));                       // repairs the regression
+    if (results.length === 3) return writeCall(src('a + b', 'x * 2'));                       // repairs the regression
     return { content: 'Fixed and verified.' };
   });
   const { child, port } = await startServer();
@@ -246,8 +247,8 @@ test('end to end: a failing edit is repaired from the verify output, and a regre
   const verdicts = ev.filter((e) => e.type === 'tool_result' && e.name === 'write_file').map((e) => e.result && e.result.verify && e.result.verify.status);
   assert.deepEqual(verdicts, ['fail', 'pass', 'pass'], 'edit 1 fails at once, edit 2 passes its own checks, edit 3 passes');
 
-  const second = fake.requests.find((r) => r.messages.filter((m) => m.role === 'tool').length === 1);
-  assert.match(second.messages.filter((m) => m.role === 'tool')[0].content, /VERIFY FAILED/, 'the model sees the failure and the repair instructions in the very next request');
+  const second = fake.requests.find((r) => r.messages.filter((m) => m.role === 'tool').length === 2);
+  assert.match(second.messages.filter((m) => m.role === 'tool').map((m) => m.content).join('\n'), /VERIFY FAILED/, 'the model sees the failure and the repair instructions in the very next request');
 
   assert.ok(ev.some((e) => e.type === 'info' && /final verification failed/.test(e.text)), 'the regression in double() is found by the full suite');
   assert.ok(fake.requests.some((r) => r.messages.some((m) => m.role === 'user' && /final verification\]/.test(m.content || '') && /double/.test(m.content))), 'the failing output is sent back to the model');

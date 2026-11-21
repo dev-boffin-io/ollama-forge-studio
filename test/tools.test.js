@@ -292,6 +292,16 @@ test('write_file / edit_file / delete_file return git-style diffs; ui_diff exist
     // multi_edit
     const me = await tools.executeTool('multi_edit', { path: 'src/new.js', edits: [{ old_string: 'a', new_string: 'A' }, { old_string: 'd', new_string: 'D' }] }, c());
     assert.deepEqual([me.additions, me.deletions], [2, 2]);
+    const persist = c();
+    await tools.executeTool('write_file', { path: 'src/guard.js', content: 'a\nb\n' }, persist);
+    fs.writeFileSync(path.join(wd, 'src/guard.js'), 'a\nB\n');
+    await assert.rejects(() => tools.executeTool('edit_file', { path: 'src/guard.js', old_string: 'a', new_string: 'A' }, persist), /changed on disk since you last read it/);
+    await assert.rejects(() => tools.executeTool('write_file', { path: 'src/guard.js', content: 'x\n' }, persist), /changed on disk/);
+    const long = Array.from({ length: 60 }, (_, i) => `line ${i}`).join('\n') + '\n';
+    await tools.executeTool('write_file', { path: 'src/long.js', content: long }, persist);
+    await assert.rejects(() => tools.executeTool('write_file', { path: 'src/long.js', content: 'short\n' }, persist), /Refusing to overwrite.*truncated output/);
+    const forced = await tools.executeTool('write_file', { path: 'src/long.js', content: 'short\n', confirm_overwrite: true }, persist);
+    assert.equal(forced.ok, true);
     // delete
     const del = await tools.executeTool('delete_file', { path: 'src/new.js' }, c());
     assert.equal(del.deleted, true);
