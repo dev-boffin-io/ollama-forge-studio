@@ -4,6 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { setup } = require('./helpers');
@@ -185,4 +186,105 @@ test('a custom answer is sent to the model as a user message', async (t) => {
   });
   assert.ok(asked, 'the user is asked');
   assert.ok(fake.requests.some((r) => r.messages.some((m) => m.role === 'user' && String(m.content || '').includes('also update the docs'))), 'the custom answer reaches the model');
+});
+
+test('project questions are grounded in real reads before answering', async (t) => {
+  const fake = await fakeOllama((req) => {
+    const grounded = req.messages.some((m) => m.role === 'user' && /read the code first/i.test(String(m.content || '')));
+    const cited = req.messages.some((m) => m.role === 'user' && /file:line citations/i.test(String(m.content || '')));
+    const unverified = req.messages.some((m) => m.role === 'user' && /citations to files not read this turn/i.test(String(m.content || '')));
+    const reads = req.messages.filter((m) => m.role === 'tool' && ['read_file', 'grep', 'lsp'].includes(m.tool_name)).length;
+    if (!grounded) return { content: 'I can tell from the file names.' };
+    if (reads < 2) return { tool_calls: [{ function: { name: 'read_file', arguments: { path: 'sample.js' } } }] };
+    if (!cited) return { content: 'Reviewed with evidence.' };
+    if (!unverified) return { content: 'README.md:1 says so.' };
+    return { content: 'Reviewed sample.js:1.' };
+  });
+  const { child, port } = await startServer();
+  t.after(() => { child.kill('SIGKILL'); fake.srv.close(); });
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, nudgePrompt: false, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
+  fs.writeFileSync(path.join(ctx.dir, 'sample.js'), 'module.exports = 1;\n');
+
+  const ev = await chat(base, 'review the codebase and report issues');
+  assert.ok(ev.some((e) => e.type === 'info' && /read the code first/.test(e.text)));
+  assert.ok(ev.some((e) => e.type === 'info' && /file:line citations/.test(e.text)));
+  assert.ok(ev.some((e) => e.type === 'info' && /citations to files not read this turn/.test(e.text)));
+  assert.ok(fake.requests.some((r) => r.messages.some((m) => m.role === 'user' && /read the code first/i.test(String(m.content || '')))));
+  assert.ok(fake.requests.some((r) => r.messages.some((m) => m.role === 'user' && /file:line citations/i.test(String(m.content || '')))));
+  assert.ok(fake.requests.some((r) => r.messages.filter((m) => m.role === 'tool' && m.tool_name === 'read_file').length >= 2));
+});
+
+test('listing-only answers are forced to read the code first', async (t) => {
+  const fake = await fakeOllama((req) => {
+    const toolMsgs = req.messages.filter((m) => m.role === 'tool');
+    const grounded = req.messages.some((m) => m.role === 'user' && /read the code first/i.test(String(m.content || '')));
+    const cited = req.messages.some((m) => m.role === 'user' && /file:line citations/i.test(String(m.content || '')));
+    const reads = req.messages.filter((m) => m.role === 'tool' && ['read_file', 'grep', 'lsp'].includes(m.tool_name)).length;
+    if (!toolMsgs.length) return { tool_calls: [{ function: { name: 'list_files', arguments: {} } }] };
+    if (!grounded) return { content: 'I can answer from the file list.' };
+    if (reads < 2) return { tool_calls: [{ function: { name: 'read_file', arguments: { path: 'sample.js' } } }] };
+    if (!cited) return { content: 'I read the code.' };
+    return { content: 'Evidence is in sample.js:1.' };
+  });
+  const { child, port } = await startServer();
+  t.after(() => { child.kill('SIGKILL'); fake.srv.close(); });
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, nudgePrompt: false, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
+  fs.writeFileSync(path.join(ctx.dir, 'sample.js'), 'module.exports = 1;\n');
+
+  const ev = await chat(base, 'tell me what is here');
+  assert.ok(ev.some((e) => e.type === 'info' && /read the code first/.test(e.text)));
+  assert.ok(fake.requests.some((r) => r.messages.some((m) => m.role === 'user' && /read the code first/i.test(String(m.content || '')))));
+  assert.ok(fake.requests.some((r) => r.messages.filter((m) => m.role === 'tool' && m.tool_name === 'read_file').length >= 2));
+});
+
+test('only one continuation notice is issued when grounding and unfinished triggers overlap', async (t) => {
+  const todoCall = (status) => ({ tool_calls: [{ function: { name: 'todo_write', arguments: { todos: [{ content: 'Review code', status }] } } }] });
+  const fake = await fakeOllama((req) => {
+    const grounded = req.messages.some((m) => m.role === 'user' && /read the code first/i.test(String(m.content || '')));
+    const reads = req.messages.filter((m) => m.role === 'tool' && m.tool_name === 'read_file' && !m.content.includes('"error"')).length;
+    const completed = req.messages.some((m) => (m.tool_calls || []).some((c) => c.function.name === 'todo_write' && /completed/.test(JSON.stringify(c.function.arguments))));
+    if (!req.messages.some((m) => m.role === 'tool')) return todoCall('in_progress');
+    if (!grounded) return { content: 'I will review the codebase and report issues.' };
+    if (reads < 2) return { tool_calls: [{ function: { name: 'read_file', arguments: { path: 'sample.js' } } }] };
+    if (!completed) return todoCall('completed');
+    return { content: 'Reviewed sample.js:1.' };
+  });
+  const { child, port } = await startServer();
+  t.after(() => { child.kill('SIGKILL'); fake.srv.close(); });
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, nudgePrompt: false, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
+  fs.writeFileSync(path.join(ctx.dir, 'sample.js'), 'module.exports = 1;\n');
+
+  const ev = await chat(base, 'review the codebase and report issues');
+  const nudges = ev.filter((e) => e.type === 'info' && /^⟳ /.test(String(e.text || '')));
+  assert.equal(nudges.length, 1, 'only one continuation notice should be emitted for the same assistant reply');
+  assert.match(nudges[0].text, /read the code first/);
+  assert.ok(!ev.some((e) => e.type === 'info' && /work is not finished/.test(String(e.text || ''))), 'the unfinished nudge must not fire again after grounding won');
+  assert.ok(ev.some((e) => e.type === 'done'));
+});
+
+test('the model receives a compact ledger of current-turn read and write operations', async (t) => {
+  const fake = await fakeOllama((req) => {
+    const tools = req.messages.filter((m) => m.role === 'tool');
+    if (!tools.length) return { tool_calls: [{ function: { name: 'read_file', arguments: { path: 'sample.js' } } }] };
+    if (tools.length === 1) return { tool_calls: [{ function: { name: 'write_file', arguments: { path: 'ledger-note.txt', content: 'hello\n' } } }] };
+    return { content: 'Wrote ledger-note.txt based on sample.js:1.' };
+  });
+  const { child, port } = await startServer();
+  t.after(() => { child.kill('SIGKILL'); fake.srv.close(); });
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(base + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: `http://127.0.0.1:${fake.port}`, model: 'fake', snapshots: false, recallAuto: false, nudgePrompt: false, permission: { edit: 'allow', bash: { '*': 'allow' } } }) });
+  fs.writeFileSync(path.join(ctx.dir, 'sample.js'), 'module.exports = 1;\n');
+
+  const ev = await chat(base, 'record a note from the project');
+  assert.ok(ev.some((e) => e.type === 'done'));
+  const chatReq = [...fake.requests].reverse().find((r) => r.messages.some((m) => m.role === 'system' && /autonomous software engineer/.test(String(m.content || ''))));
+  const system = String((chatReq.messages.find((m) => m.role === 'system') || {}).content || '');
+  assert.match(system, /<current-turn file ledger/);
+  assert.match(system, /read sample\.js lines 1-5000/);
+  assert.match(system, /write ledger-note\.txt/);
+  assert.ok(system.length < 20000, 'the ledger must stay compact');
+  assert.ok(chatReq.messages.some((m) => m.role === 'tool' && m.tool_name === 'read_file' && /module\.exports/.test(String(m.content || ''))), 'the full read output stays in the conversation');
 });

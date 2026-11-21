@@ -257,6 +257,18 @@ test('pruneToolOutputs keeps the latest unchanged read_file per file, prunes sta
   assert.equal(!!m[7].pruned, true);    // unrelated big output
 });
 
+test('pruneToolOutputs drops kept reads after a bash command that writes files', () => {
+  const { pruneToolOutputs } = require('../lib/agent');
+  const big = (t) => JSON.stringify({ content: t.repeat(800) });
+  const m = [
+    callMsg('a', 'read_file', { path: 'keep.js' }), { role: 'tool', tool_call_id: 'a', content: big('k') },
+    callMsg('b', 'bash', { command: 'echo x > keep.js' }), { role: 'tool', tool_call_id: 'b', content: big('z') },
+    { role: 'user', content: 'x'.repeat(4000) },
+  ];
+  pruneToolOutputs(m, 100);
+  assert.equal(!!m[1].pruned, true);
+});
+
 test('write_file / edit_file / delete_file return git-style diffs; ui_diff exists for the UI', async () => {
   const fs = require('node:fs');
   const path = require('node:path');
