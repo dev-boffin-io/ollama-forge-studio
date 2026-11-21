@@ -213,6 +213,24 @@ async function handleApi(req, res, url) {
 
   if (pathname === '/api/defaults' && method === 'GET') return sendJson(res, 200, cfg.DEFAULT_CONFIG);
 
+  if (pathname === '/api/skills/load' && method === 'POST') {
+    const b = await readBody(req);
+    const config = cfg.loadConfig();
+    if (!skills.remoteOn(config)) return sendJson(res, 403, { error: 'remote skills are off (netcheck or remoteSkills is disabled)' });
+    const url = String(b.url || '').trim();
+    if (!skills.isRemoteRef(url)) return sendJson(res, 400, { error: 'enter an http(s) repository or SKILL.md URL' });
+    const session = b.sessionId ? await sessions.get(b.sessionId) : await sessions.create({ agent: b.agent || config.agent, model: b.model || config.model });
+    if (running.has(session.id)) return sendJson(res, 409, { error: 'this session is still running — stop it first', running: true });
+    const content = await skills.loadRemote(url, config, { skill: String(b.skill || '').trim() });
+    const match = content.match(/^<skill_content name="([^"]+)"/);
+    const name = (match ? match[1] : 'remote skill').slice(0, 80);
+    const display = `◇ remote skill loaded: ${name}`;
+    session.messages.push({ role: 'user', notice: true, turn: session.turn || 0, display, content });
+    await sessions.save(session);
+    const src = content.match(/ url="([^"]+)"/);
+    return sendJson(res, 200, { ok: true, sessionId: session.id, name, url: src ? src[1] : url, display });
+  }
+
   if (pathname === '/api/models' && method === 'GET') {
     const models = await llm.listAll(cfg.loadConfig());
     return sendJson(res, 200, { models, providers: Object.values(llm.providersOf(cfg.loadConfig())).map((p) => ({ id: p.id, type: p.type, endpoint: p.endpoint })) });

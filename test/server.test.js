@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { setup } = require('./helpers');
 
@@ -100,4 +101,43 @@ test('HTTP API exposes plugin status/routes and sandbox status', async (t) => {
 
   const sandbox = await (await fetch(base + '/api/sandbox')).json();
   assert.equal(sandbox.enabled, false);
+});
+
+test('POST /api/skills/load adds a compact remote-skill note to the session', async (t) => {
+  const skill = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/markdown' });
+    res.end('---\nname: ui-remote\ndescription: loaded from the UI\n---\nUse the linter.\n');
+  });
+  await new Promise((r) => skill.listen(0, '127.0.0.1', r));
+  t.after(() => { skill.closeAllConnections?.(); skill.close(); });
+
+  const before = ctx.cfg.loadConfig();
+  ctx.cfg.saveConfig({ snapshots: false, remoteSkills: { enabled: true, allowHosts: ['127.0.0.1'] }, webfetch: { allowPrivate: true } });
+  t.after(() => ctx.cfg.saveConfig({ remoteSkills: before.remoteSkills, webfetch: before.webfetch, snapshots: before.snapshots }));
+
+  const { child, port } = await startServer();
+  t.after(() => child.kill('SIGKILL'));
+  const base = `http://127.0.0.1:${port}`;
+  const url = `http://127.0.0.1:${skill.address().port}/SKILL.md`;
+
+  const res = await fetch(base + '/api/skills/load', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }),
+  });
+  assert.equal(res.status, 200);
+  const loaded = await res.json();
+  assert.equal(loaded.name, 'ui-remote');
+  assert.ok(loaded.sessionId);
+  assert.equal(loaded.display, '◇ remote skill loaded: ui-remote');
+
+  const s = await (await fetch(base + `/api/sessions/${loaded.sessionId}`)).json();
+  const note = s.messages.find((m) => m.notice);
+  assert.ok(note);
+  assert.equal(note.display, '◇ remote skill loaded: ui-remote');
+  assert.ok(note.content.includes('<skill_content name="ui-remote"'));
+  assert.ok(note.content.includes('untrusted'));
+
+  const bad = await fetch(base + '/api/skills/load', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: 'file:///etc/passwd' }),
+  });
+  assert.equal(bad.status, 400);
 });
