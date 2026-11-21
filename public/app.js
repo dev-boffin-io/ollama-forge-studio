@@ -108,6 +108,8 @@ function openSettings() {
   $('sRequestTimeoutMs').value = c.requestTimeoutMs == null ? '' : c.requestTimeoutMs;
   $('sSystemPrompt').value = c.systemPrompt || '';
   $('sWake').value = String(c.wakeOnProcessExit !== false);
+  $('sNetcheck').checked = c.netcheck !== false;
+  $('sRemoteSkills').checked = !c.remoteSkills || c.remoteSkills.enabled !== false;
   if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
 }
 
@@ -123,8 +125,12 @@ async function resetSettings() {
     $('sRequestTimeoutMs').value = def.requestTimeoutMs == null ? '' : def.requestTimeoutMs;
     $('sSystemPrompt').value = def.systemPrompt || '';
     $('sWake').value = String(def.wakeOnProcessExit !== false);
+    $('sNetcheck').checked = def.netcheck !== false;
+    $('sRemoteSkills').checked = !def.remoteSkills || def.remoteSkills.enabled !== false;
     const patch = {
       wakeOnProcessExit: def.wakeOnProcessExit,
+      netcheck: def.netcheck,
+      remoteSkills: def.remoteSkills,
       thinking: def.thinking,
       temperature: def.temperature,
       numCtx: def.numCtx,
@@ -148,6 +154,8 @@ async function saveSettings() {
     requestTimeoutMs: $('sRequestTimeoutMs').value === '' ? undefined : Number($('sRequestTimeoutMs').value),
     systemPrompt: $('sSystemPrompt').value,
     wakeOnProcessExit: $('sWake').value === 'true',
+    netcheck: $('sNetcheck').checked,
+    remoteSkills: { ...((state.config && state.config.remoteSkills) || {}), enabled: $('sRemoteSkills').checked },
   };
   state.config = await api('/api/config', { method: 'PUT', body: JSON.stringify(patch) });
   state.model = state.config.model;
