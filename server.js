@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 'use strict';
 
+// node:sqlite (long-term memory) prints an ExperimentalWarning on every start; hide just that one, keep all others.
+process.removeAllListeners('warning');
+process.on('warning', (w) => { if (w && w.name === 'ExperimentalWarning' && /SQLite/i.test(w.message)) return; console.warn(`(node:${process.pid}) ${w.name}: ${w.message}`); });
+
 const http = require('node:http');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
@@ -32,6 +36,8 @@ const log = require('./lib/log');
 const { statusFor, explain } = require('./lib/errors');
 const { serveFile, downloadBlockedReason } = require('./lib/serve-file');
 const { createWaker } = require('./lib/wake');
+const { createGuard } = require('./lib/guard');
+const trust = require('./lib/trust');
 const recall = require('./lib/recall');
 const { bus, TYPES } = require('./lib/events');
 const { FleetManager } = require('./lib/agents');
@@ -45,7 +51,7 @@ process.on('exit', () => { try { plugins.unload(); } catch { /* shutting down */
 /* ---------- CLI:  ollama-forge-studio [dir] [--port N] [--host H] [-c | --continue] [-s ID] [--agent NAME] ---------- */
 
 function parseArgs(argv) {
-  const o = { dir: null, port: Number(process.env.PORT || 4310), host: process.env.HOST || '127.0.0.1', cont: false, session: null, agent: null };
+  const o = { dir: null, port: Number(process.env.PORT || 4310), host: process.env.HOST || '127.0.0.1', cont: false, session: null, agent: null, trust: false, allowHosts: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--port' || a === '-p') o.port = Number(argv[++i]);
@@ -54,8 +60,10 @@ function parseArgs(argv) {
     else if (a === '--continue' || a === '-c') o.cont = true;
     else if (a === '--session' || a === '-s') o.session = argv[++i];
     else if (a === '--agent') o.agent = argv[++i];
+    else if (a === '--trust') o.trust = true;
+    else if (a === '--allow-host') o.allowHosts.push(argv[++i]);
     else if (a === '-h' || a === '--help') {
-      console.log('usage: ollama-forge-studio [dir] [--port N] [--host H] [-c|--continue] [-s <session-id>] [--agent <name>]');
+      console.log('usage: ollama-forge-studio [dir] [--port N] [--host H] [-c|--continue] [-s <session-id>] [--agent <name>] [--trust] [--allow-host NAME]');
       process.exit(0);
     } else if (!a.startsWith('-') && !o.dir) o.dir = a;
   }
@@ -63,6 +71,12 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
+// Access control (see lib/guard.js): loopback = Host/Origin checks; any other --host = access token required.
+const guard = createGuard({
+  bindHost: args.host,
+  token: process.env.OLLAMA_STUDIO_TOKEN || '',
+  extraHosts: [...String(process.env.OLLAMA_STUDIO_ALLOWED_HOSTS || '').split(','), ...args.allowHosts],
+});
 const PUBLIC_DIR = cfg.APP_ROOT ? path.join(cfg.APP_ROOT, 'public') : null; // null in the single-executable build (assets are embedded)
 
 const MIME = {
@@ -81,7 +95,7 @@ function sendJson(res, status, body, extraHeaders = {}) {
   res.end(data);
 }
 
-function readBody(req, limit = 100 * 1024 * 1024) {
+function readBody(req, limit = 8 * 1024 * 1024) {   // JSON API bodies; uploads stream separately (attach.store) with their own, larger limit
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
@@ -258,6 +272,13 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/mcp/reload' && method === 'POST') return sendJson(res, 200, { servers: await mcp.reload(cfg.loadConfig()) });
 
   if (pathname === '/api/plugins' && method === 'GET') return sendJson(res, 200, plugins.status());
+  if (pathname === '/api/trust' && method === 'GET') return sendJson(res, 200, { dir: cfg.getWorkDir(), trusted: trust.isTrusted(), untrusted: plugins.status().untrusted || [] });
+  if (pathname === '/api/trust' && method === 'POST') {
+    const b = await readBody(req);
+    if (b.trust === false) trust.untrust(); else trust.trust(cfg.getWorkDir(), { remember: b.remember !== false });
+    await plugins.reload(cfg.loadConfig());
+    return sendJson(res, 200, { dir: cfg.getWorkDir(), trusted: trust.isTrusted(), untrusted: plugins.status().untrusted || [] });
+  }
   if (pathname === '/api/plugins/reload' && method === 'POST') return sendJson(res, 200, await plugins.reload(cfg.loadConfig()));
   if (pathname === '/api/sandbox' && method === 'GET') return sendJson(res, 200, sandbox.status(cfg.loadConfig()));
 
@@ -307,7 +328,7 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/file') {
     const rel = url.searchParams.get('path') || '';
     if (method === 'GET') return sendJson(res, 200, { path: rel, content: await ws.readFile(rel) });
-    if (method === 'PUT') { const b = await readBody(req); return sendJson(res, 200, await ws.writeFile(b.path || rel, b.content)); }
+    if (method === 'PUT') { const b = await readBody(req, 64 * 1024 * 1024); return sendJson(res, 200, await ws.writeFile(b.path || rel, b.content)); }
     if (method === 'DELETE') return sendJson(res, 200, await ws.deleteFile(rel));
   }
 
@@ -492,7 +513,7 @@ async function handleAttach(res, id) {
 }
 
 async function handleChat(req, res) {
-  const body = await readBody(req);
+  const body = await readBody(req, 32 * 1024 * 1024);
   const config = cfg.loadConfig();
   const text = String(body.text || '').trim();
   const att = (Array.isArray(body.attachments) ? body.attachments : []).slice(0, 12).map((a) => ({ id: String(a.id || ''), name: String(a.name || a.id || '') }));
@@ -821,7 +842,16 @@ async function handleDashboardApi(req, res, url) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  let url;
+  try { url = new URL(req.url, 'http://localhost'); } catch { res.writeHead(400); return res.end('bad request'); }
+  // never let the UI be framed (clickjacking), sniffed or leak its URL (the token may be in it on the first visit)
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  const verdict = guard.check(req, url);
+  if (!verdict.ok) { log.warn('guard', `${req.method} ${url.pathname} refused: ${verdict.error}`); return sendJson(res, verdict.status, { error: verdict.error }); }
+  if (verdict.setCookie) res.setHeader('Set-Cookie', verdict.setCookie);
   try {
     if (url.pathname === '/api/chat' && req.method === 'POST') return await handleChat(req, res);
     const att = url.pathname.match(/^\/api\/sessions\/(ses_[a-z0-9]+)\/attach$/);
@@ -843,11 +873,29 @@ server.on('clientError', (err, socket) => { try { if (socket.writable) socket.en
 
 const startup = { sessionId: null, agent: args.agent || null };
 
+/** Does this project ship its own plugins? Then ask once whether to trust it (--trust skips the question). */
+async function resolveProjectTrust(dir) {
+  if (args.trust) { trust.trust(dir, { remember: true }); return; }
+  if (trust.isTrusted(dir)) return;
+  const owned = ['.studio', '.claude', '.agents'].map((d) => path.join(dir, d, 'plugins')).filter((p) => { try { return fs.readdirSync(p).some((n) => !n.startsWith('.')); } catch { return false; } });
+  if (!owned.length) return;
+  console.log(`\nThis project contains plugins (JavaScript that runs with your privileges):\n${owned.map((p) => '  ' + p).join('\n')}`);
+  if (!process.stdin.isTTY) { console.log('Not loading them (project not trusted). Re-run with --trust, or use POST /api/trust.\n'); return; }
+  const rl = require('node:readline').createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise((resolve) => rl.question('Trust this project? [y] always  [o] this run only  [N] no : ', resolve));
+  rl.close();
+  const a = String(answer).trim().toLowerCase();
+  if (a === 'y' || a === 'yes') trust.trust(dir, { remember: true });
+  else if (a === 'o' || a === 'once') trust.trust(dir, { remember: false });
+  else console.log('Plugins of this project stay disabled.\n');
+}
+
 (async () => {
   let workDir;
   try { workDir = cfg.setWorkDir(args.dir || process.cwd()); } catch (e) { console.error(`cannot open the directory: ${e.message}`); log.error('boot', 'setWorkDir failed', e); process.exit(1); }
   pruneToolOutput();
   recall.configure(cfg.loadConfig());
+  await resolveProjectTrust(workDir);
   await plugins.load(cfg.loadConfig());
   if (args.session) startup.sessionId = args.session;
   else if (args.cont) { try { startup.sessionId = (await sessions.latest())?.id || null; } catch (e) { log.warn('boot', 'could not find the latest session to continue', e); } }
@@ -861,7 +909,13 @@ const startup = { sessionId: null, agent: args.agent || null };
     server.listen(port, args.host, () => {
       if (cfg.loadConfig().snapshots !== false) snapshot.warmUp().catch(log.swallow('boot', 'snapshot warm-up failed'));   // background: never delays a message
       console.log(`ollama-forge-studio  dir: ${workDir}`);
-      console.log(`               url: http://${args.host}:${server.address().port}${startup.sessionId ? `   (resuming ${startup.sessionId})` : ''}`);
+      const shownHost = /^(0\.0\.0\.0|::)$/.test(args.host) ? 'localhost' : args.host;
+      const tokenPart = guard.tokenRequired ? `/?token=${guard.token}` : '';
+      console.log(`               url: http://${shownHost}:${server.address().port}${tokenPart}${startup.sessionId ? `   (resuming ${startup.sessionId})` : ''}`);
+      if (guard.tokenRequired) console.log('        access: a token is required because the server is reachable from other machines (keep that URL private)');
+      else if (!process.env.OLLAMA_STUDIO_ALLOWED_HOSTS && !args.allowHosts.length) console.log('        access: loopback only (Host/Origin checked); use --host 0.0.0.0 for LAN access (then a token is required)');
+      const [maj, min] = process.versions.node.split('.').map(Number);
+      if (maj < 22 || (maj === 22 && min < 5)) console.log(`        note: Node ${process.versions.node} has no node:sqlite, so long-term memory (recall) is disabled; use Node >= 22.5 for it`);
     });
   };
   tryListen(0);
