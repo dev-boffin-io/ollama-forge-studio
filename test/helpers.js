@@ -10,6 +10,7 @@ function setup() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-home-'));
   process.env.OLLAMA_STUDIO_HOME = home;
   process.env.OLLAMA_STUDIO_NO_BUNDLED = '1';                          // shipped examples/ agents, skills, commands and plugins would change every list under test (child servers inherit this)
+  process.env.OLLAMA_STUDIO_TRUST_PROJECT = '1';                        // existing tests load project-level plugins; trust.test.js clears this on purpose
   process.env.OLLAMA_STUDIO_CONFIG = path.join(home, 'config.json');   // never touch the project's config.json
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-proj-'));
   const cfg = require('../lib/config');
