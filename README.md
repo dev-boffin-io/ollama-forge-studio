@@ -1,7 +1,7 @@
 # Ollama Forge Studio v1.0
 
 An agentic coding studio for any Ollama endpoint (local or a Cloudflare tunnel URL).
-Zero runtime dependencies — just Node 18+.
+Zero runtime dependencies — Node 18+ (Node 22.5+ for long-term memory / recall, which needs `node:sqlite`).
 
 ```
 Browser ──HTTP/SSE──► server.js ──REST──► Ollama endpoint
@@ -52,14 +52,39 @@ npm run build            # → dist/ollama-forge-studio  (dist/ollama-forge-stud
 ```
 
 - Needs **Node ≥ 20.12** (22+ recommended) on the *build* machine; the binary embeds that Node runtime (~100 MB).
-- It can't cross-compile: build on each OS/arch you target. `.github/workflows/release.yml` runs on **every commit** (any branch) and   on pull requests: first `npm run check` (syntax + module load) and `npm test`,
-  then builds Linux, macOS and Windows binaries, kept as run artifacts for 30 days. Pushing a `v*` tag also attaches them to a GitHub release;
-  it can be started manually from the Actions tab too.
+- It can't cross-compile: build on each OS/arch you target. `.github/workflows/release.yml` runs `npm run check` and `npm test` on pushes to `main`/`master` and on pull requests;
+  the Linux, macOS and Windows binaries are built only for `v*` tags and manual runs (Actions tab). A `v*` tag also attaches them to a GitHub release (the only job with write access).
 - The UI (`public/*`) is embedded in the binary. Without a source tree, the global `config.json` is read/written at
   `~/.config/ollama-studio/config.json` (`$XDG_CONFIG_HOME` honoured) next to your global agents/commands/skills.
   Per-project data still lives in `~/.studio/<project>/`. Set `OLLAMA_STUDIO_CONFIG` to use a different config file
   (the tests use this to keep `config.json` out of the source tree).
 - `git` is still needed on PATH for snapshots/undo (as in source mode); the studio runs fine without it.
+
+## Security model
+
+The studio can edit files and run commands as *you*, so it protects its own HTTP API:
+
+| Situation | What is enforced |
+|---|---|
+| Default (`--host 127.0.0.1`) | Only the Host names `localhost`, `127.0.0.1`, `[::1]` are answered (blocks DNS rebinding). Browsers' cross-site requests are refused (`Origin` / `Sec-Fetch-Site` checks) and every write must be `application/json`, so no web page you visit can drive the API. Add more names with `OLLAMA_STUDIO_ALLOWED_HOSTS=a.example,b.example` or `--allow-host`. |
+| Reachable from other machines (`--host 0.0.0.0`, a LAN IP, …) | A random **access token** is required. The URL printed at startup contains it (`http://…/?token=…`); the first visit stores it in an HttpOnly `SameSite=Strict` cookie. Scripts can send `Authorization: Bearer <token>`. Fix the token with `OLLAMA_STUDIO_TOKEN`. The same token also protects a loopback server when `OLLAMA_STUDIO_TOKEN` is set. |
+| All responses | `X-Frame-Options: DENY`, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy: no-referrer`. JSON bodies are capped at 8 MB (chat 32 MB, file save 64 MB); uploads stream with their own `maxUploadMB` limit. |
+
+**Project trust.** Plugins that live *inside* a project (`.studio/plugins`, `.claude/plugins`, `.agents/plugins`) and a project's own `node_modules/.bin` (for LSP servers) are code from whoever owns that folder.
+They are ignored until you trust the project: answer the prompt at startup (`y` always / `o` this run), start with `--trust`, call `POST /api/trust {"trust":true}`, or set `OLLAMA_STUDIO_TRUST_PROJECT=1`.
+Trusted folders are remembered in `~/.studio/trusted-projects.json`. Plugins in your own home (`~/.config/ollama-studio/plugins`, `~/.studio/<project>/plugins`) never need it.
+
+**Secrets.** Commands run by the agent (`bash`, background processes, the terminal, command plugins) get your environment *without* variables that look like secrets (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, `*CREDENTIALS*`, the `apiKeyEnv` variables of your providers, `OLLAMA_STUDIO_TOKEN`).
+Change that with `"bashEnv": { "allow": ["GITHUB_TOKEN"] }`, `{ "deny": ["FOO_*"] }` or `{ "inherit": true }`. `config.json` is written with mode `0600` (directories `0700`).
+
+**webfetch (SSRF).** Redirects are followed manually (max 5) and a public URL may never lead to a private address; hostnames are resolved and refused if they point to loopback / private / link-local / CGNAT / IPv6-ULA / IPv4-mapped addresses.
+`localhost` / LAN URLs that you type still work after the usual permission question. For an intranet hostname that resolves to a private IP set `"webfetch": { "allowPrivate": true }`.
+Known limit: the name is resolved once before connecting, so a hostile DNS server that changes its answer between that check and the connection is not covered; use the Docker sandbox and a firewall if you fetch untrusted URLs.
+
+**Permissions.** `edit` is allowed by default (confined to the project, undoable); `bash` asks. `git diff|log` stay auto-allowed but their `--output`, `--ext-diff`, `--textconv`, `-c` flags ask.
+For stricter use: `"permission": { "edit": "ask" }` and `"sandbox": { "enabled": true }` (Docker).
+
+Not covered: the VS Code extension does not send the token yet, so use it with a loopback server; and a model can still do anything *you approve* — read prompts before pressing Allow. See `SECURITY.md`.
 
 ## Tests
 
