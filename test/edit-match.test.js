@@ -69,6 +69,12 @@ test('fuzzyLineMatch finds near-identical lines using Levenshtein similarity', (
   assert.equal(r.content, 'const value = compute(2);\nconst other = 2;\n');
 });
 
+test('refuses a block match whose middle line drifted too far', () => {
+  const content = 'function f() {\n  const x = 1;\n  return ok();\n}\n';
+  const find = 'function f() {\n  const completelyDifferent = 12345;\n  return ok();\n}';
+  assert.throws(() => replace(content, find, 'replacement'), /only approximately matches the file/);
+});
+
 test('indentation detection checks style and width per line', () => {
   const find = '    return result;';
   assert.deepEqual([...indentationFlexible('function f(){\n\treturn result;\n}', find)], ['\treturn result;']);
