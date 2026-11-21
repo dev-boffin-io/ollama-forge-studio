@@ -47,7 +47,7 @@ test('promptSection: lists available skills, empty when there are none', () => {
   assert.ok(withSkills.includes('- commit-style: Write good commit messages'));
   assert.ok(withSkills.includes('- deploy: Ship it'));
 
-  const config = { ...ctx.cfg.loadConfig(), skills: { paths: [] } };
+  const config = { ...ctx.cfg.loadConfig(), skills: { paths: [] }, remoteSkills: { enabled: false } };
   // point at an empty set of roots by using a fresh workdir with no skill folders
   const empty = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'skills-empty-'));
   ctx.cfg.setWorkDir(empty);
