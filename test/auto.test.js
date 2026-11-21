@@ -139,9 +139,10 @@ function withChat(fn, body) {
 
 test('route: picks the named agent, remembers it, and sends candidates + current agent + context to the model', async () => {
   const session = { id: 'r1', agent: 'auto', messages: [{ role: 'assistant', content: 'I finished the implementation.' }] };
+  const text = `${'filler '.repeat(300)}please look over what you wrote`;
   let picked;
   const calls = await withChat(() => ({ content: 'reviewer' }), async () => {
-    picked = await auto.route({ session, text: 'please look over what you wrote', config: ctx.cfg.loadConfig(), model: 'fake' });
+    picked = await auto.route({ session, text, config: ctx.cfg.loadConfig(), model: 'fake' });
   });
   assert.equal(picked.name, 'reviewer');
   assert.equal(session.autoAgent, 'reviewer');
@@ -151,7 +152,8 @@ test('route: picks the named agent, remembers it, and sends candidates + current
   for (const n of ['secret', 'helper', 'hidden-one', 'auto']) assert.ok(!new RegExp(`- ${n}:`).test(prompt), `${n} must not be offered`);
   assert.match(prompt, /Current agent: build/);
   assert.match(prompt, /I finished the implementation/);
-  assert.match(prompt, /please look over what you wrote/);
+  assert.match(prompt, /\[middle omitted\]/);
+  assert.match(prompt, /please look over what you wrote$/m);
 });
 
 test('route: keeps the current agent when the answer is nonsense, the call fails, routing is off or there is nothing to choose', async () => {
