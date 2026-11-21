@@ -1081,6 +1081,44 @@ async function saveProviders() {
   await loadModels();
 }
 
+function openSkills() {
+  const dlg = $('skillsDlg');
+  const msg = $('skillMsg');
+  msg.className = 'hint-line';
+  msg.textContent = '';
+  if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+  $('skillUrl').focus();
+}
+
+async function loadSkillUrl() {
+  const msg = $('skillMsg');
+  const btn = $('skillLoad');
+  const url = $('skillUrl').value.trim();
+  msg.className = 'hint-line';
+  msg.textContent = '';
+  if (!/^https?:\/\//i.test(url)) {
+    msg.className = 'hint-line err';
+    msg.textContent = 'Enter a URL that starts with http:// or https://';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  try {
+    const r = await api('/api/skills/load', { method: 'POST', body: JSON.stringify({ url, skill: $('skillName').value.trim(), sessionId: state.sessionId, model: $('model').value, agent: $('agent').value }) });
+    $('skillsDlg').close();
+    $('skillUrl').value = '';
+    $('skillName').value = '';
+    await openSession(r.sessionId);
+    setStatus(`skill loaded: ${r.name}`, 'ok');
+  } catch (err) {
+    msg.className = 'hint-line err';
+    msg.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Load';
+  }
+}
+
 /* ---------- tools / integrations dialog ---------- */
 
 async function openStatus() {
@@ -1363,6 +1401,10 @@ $('addProvider').addEventListener('click', () => {
   $('providerRows').insertAdjacentHTML('beforeend', providerRowHtml('', { type: 'openai', endpoint: '' }, false));
   bindProviderRows();
 });
+$('skillsBtn').addEventListener('click', openSkills);
+$('skillCancel').addEventListener('click', () => $('skillsDlg').close());
+$('skillLoad').addEventListener('click', () => loadSkillUrl());
+$('skillUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); loadSkillUrl(); } });
 $('statusBtn').addEventListener('click', openStatus);
 $('quitBtn').addEventListener('click', async () => {
   if (!confirm('Stop the Ollama Forge Studio server? Running work is saved; background processes will be killed.')) return;

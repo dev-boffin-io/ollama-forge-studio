@@ -21,6 +21,7 @@
         <input id="endpoint" type="url" spellcheck="false" placeholder="http://localhost:11434 or https://xxx.trycloudflare.com" />
       </label>
       <button id="providersBtn" class="btn ghost" title="Manage providers (Ollama / OpenAI / Anthropic / Gemini / Groq, API keys)">Providers</button>
+      <button id="skillsBtn" class="btn ghost" title="Load a remote skill from a URL into this conversation">Skills</button>
       <button id="settingsBtn" class="btn ghost" title="Agent &amp; runtime settings">Settings</button>
       <label><span class="lbl">Model</span>
         <select id="model"></select>
@@ -128,6 +129,18 @@
       <span class="spacer"></span>
       <button id="providersCancel" class="btn small ghost">Cancel</button>
       <button id="providersSave" class="btn small primary">Save</button>
+    </div>
+  </dialog>
+
+  <dialog id="skillsDlg" class="dlg">
+    <h3>Skills</h3>
+    <p class="hint-line">Paste a GitHub repository URL to find its skill Markdown automatically, or a direct SKILL.md URL. The agent receives the full text; the chat shows only a short note.</p>
+    <label class="settings-block"><span>Repository or skill URL</span><input id="skillUrl" type="url" spellcheck="false" placeholder="https://github.com/owner/repo" /></label>
+    <label class="settings-block"><span>Skill name (optional)</span><input id="skillName" spellcheck="false" placeholder="Used when a repository has several skills" /></label>
+    <div id="skillMsg" class="hint-line"></div>
+    <div class="row dlg-actions">
+      <button id="skillCancel" class="btn small ghost" type="button">Cancel</button>
+      <button id="skillLoad" class="btn small primary" type="button">Load</button>
     </div>
   </dialog>
 
