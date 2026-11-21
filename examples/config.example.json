@@ -17,6 +17,7 @@
   "commands": { "paths": [] },
   "skills": { "paths": [] },
   "hooks": {},
+  "verify": { "enabled": true, "onEdit": true, "final": true, "command": "", "maxFixRounds": 4, "maxFinalRounds": 3 },
   "plugins": { "enabled": true, "paths": [] },
   "sandbox": {
     "enabled": false,

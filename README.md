@@ -432,6 +432,46 @@ and may print JSON. Plugin tools use the `plugin` permission category and **ask 
 `GET /api/plugins` to inspect loaded plugins or `POST /api/plugins/reload` after changing one. Plugins are trusted
 code: only install plugins you would run directly.
 
+## Self-correction loop (verify after every edit)
+
+The agent does not just write code, it proves that the code works. Zero extra model calls; everything below is automatic.
+
+1. **Edit** — `write_file`, `edit_file`, `multi_edit` or `json_edit` changes a file.
+2. **Immediate test** — the studio checks that file at once: a syntax check for its type (`node --check`, `JSON.parse`, Python compile,
+   `bash -n`) plus the test file that belongs to it (`lib/foo.js` → `test/foo.test.js` for `node --test` projects, `test_foo.py` for
+   pytest). The verdict is attached to the tool result as `verify` (`pass` / `fail` / `skipped`).
+3. **Error analysis** — on `fail` the result contains the error output and repair instructions: read the log, decide syntax vs. logic
+   error, fix the *code* (never weaken or delete a test to get green).
+4. **Self-correction** — the model edits again and the check re-runs automatically, until it passes. After `maxFixRounds` failures in a
+   row on one file it is told to stop guessing and report the exact error.
+5. **Final verification** — when the model wants to end its turn and files changed, the project's **full test command** runs once
+   (regression check). A failure goes back to the model together with its output and the turn continues; at most `maxFinalRounds`
+   times. Moves and deletes also trigger the final check.
+
+The full suite is deliberately *not* run after every single edit (it can take a minute or more): per edit you get the fast file-level
+feedback, the full suite runs once at the end. The final command is auto-detected — `npm|yarn|pnpm test` (the `npm init` placeholder is
+ignored), `pytest`, `go test ./...`, `cargo test`, `make test` — and is **never guessed**: a project without a test command is simply
+not verified. Commands run through the same runner as `bash`, so the [Docker sandbox](#docker-sandbox) applies when enabled.
+
+```json
+"verify": {
+  "enabled": true,
+  "onEdit": true,
+  "final": true,
+  "command": "",
+  "editCommand": "",
+  "editTimeoutSec": 60,
+  "finalTimeoutSec": 280,
+  "maxFixRounds": 4,
+  "maxFinalRounds": 3
+}
+```
+
+`command` overrides the detected full test command; `editCommand` replaces the built-in per-edit checks (placeholders `{file}` and
+`{test}`, e.g. `"npx jest --findRelatedTests {file}"`). `"verify": false` turns the whole loop off. Changes made through plugin/MCP tools
+or by `bash` are not checked per edit and do not by themselves trigger the final check: only the built-in file tools mark the turn as
+changed. Tests: `test/verify.test.js`.
+
 ## Lifecycle hooks
 
 Hooks run at agent and tool boundaries. Configure them in `config.json` or register them from a plugin:
