@@ -39,6 +39,8 @@ permission:
     "cargo test*": allow
     "*>*": deny
   read: allow
+  task:
+    general: deny
 ---
 You are a test engineer. Your job is to raise confidence in the existing code by writing tests that would actually catch regressions.
 

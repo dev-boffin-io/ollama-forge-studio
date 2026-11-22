@@ -18,6 +18,8 @@ permission:
     "git log*": allow
     "*>*": deny
   read: allow
+  task:
+    general: deny
 ---
 You are a technical writer who also reads code. Documentation must describe what the code really does, so you verify every statement against the source.
 

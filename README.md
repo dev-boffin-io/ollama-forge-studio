@@ -223,6 +223,8 @@ Set `OLLAMA_STUDIO_NO_BUNDLED=1` to switch the bundled agents, skills, commands 
 | `doc-writer`            | `*.md` and `docs/` freely, other files ask first; read-only bash         | README, API docs, doc comments, checked against the code |
 | `performance-optimizer` | edits and commands ask first; reading is free                            | measure-first profiling and optimization |
 
+The bundled agents are role-scoped; see [Skills](#skills) for the operational capabilities they do not own.
+
 The four newest are `mode: all` (pick them in the dropdown or delegate with `task`) with `auto: false`, so they do not
 crowd the [auto mode](#auto-mode) rotation. Any agent can run on its own model: add `model: provider/model` to its
 frontmatter (e.g. a cheap model for `doc-writer`, a strong one for `architect`). Opt-in `extras/agents/` adds
@@ -574,13 +576,22 @@ Folders with a `SKILL.md` (`name`, `description` frontmatter) in `~/.studio/<pro
 or the global equivalents (`~/.config/ollama-studio/skills`, `~/.claude/skills`, `~/.agents/skills`, `config.skills.paths`).
 The model sees the list and loads one on demand with the `skill` tool.
 
-**Bundled skills:** every folder in `examples/skills/` (`bug-triage`, `commit-style`, `dependency-upgrade`, `doc-generator`,
-`git-workflow`, `i18n-l10n`, `project-onboarding`, `refactor-expert`, `release-notes`, `test-and-verify`) is loaded by default and
-is overridden by a skill of the same `name` in any of the folders above.
+**Bundled skills:** every folder in `examples/skills/` (`bug-triage`, `code-explorer`, `code-quality-pass`, `commit-style`,
+`dependency-setup`, `dependency-upgrade`, `doc-generator`, `documentation-upkeep`, `error-recovery`, `file-operations`,
+`git-workflow`, `i18n-l10n`, `project-onboarding`, `refactor-expert`, `release-notes`, `test-and-dev-server`, `test-and-verify`)
+is loaded by default and is overridden by a skill of the same `name` in any of the folders above.
 In the single-file executable they are embedded at build time (`npm run build`) and unpacked once to
 `~/.config/ollama-studio/bundled/<hash>/`, so a skill's `scripts/` and `reference/` files and plugin entrypoints still have
 a real path. Bundled commands and plugins live in `examples/commands/` and `examples/plugins/` and follow the same rules.
 To ship another default agent, skill, command or plugin, drop it into the matching `examples/` folder and rebuild.
+
+**Agents vs skills:** the seven bundled agents own the roles of **architecture and design** (`architect`), **debugging and
+verified fixes** (`debug-agent`), **test authoring and execution** (`test-engineer`), **documentation** (`doc-writer`),
+**code review** (`reviewer`), **security auditing** (`security-agent`) and **performance analysis** (`performance-optimizer`).
+The skills above supply the operational layer: code exploration, file operations, refactors/formatting, error recovery,
+tests and dev servers, dependencies and documentation upkeep. General file management, formatting, dependency
+installation/upgrade and dev-server launch are skill/`build` territory, not agent jobs. Skills grant no permissions — the
+active agent's `permission:` rules still decide what may be edited or run.
 
 **Automatic shortlist:** every turn, the studio ranks local and bundled-remote skills against the latest user message and
 attaches the top 2-3 as `<auto_skills>` in the system prompt; bodies are capped so the vast library stays cheap to use.

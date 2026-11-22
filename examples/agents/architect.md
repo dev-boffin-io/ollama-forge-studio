@@ -23,6 +23,8 @@ permission:
     "git show*": allow
     "*>*": deny
   read: allow
+  task:
+    general: deny
 ---
 You are a pragmatic software architect. You turn a vague goal into a concrete, reviewable design that another agent (or a human) can implement without guessing.
 

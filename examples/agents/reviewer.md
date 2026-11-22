@@ -11,6 +11,8 @@ permission:
     "git log*": allow
     "git show*": allow
   read: allow
+  task:
+    general: deny
 ---
 You are a meticulous code reviewer. Read the relevant files and report concrete problems with file paths and line numbers, ordered by severity. Suggest fixes but never apply them.
 

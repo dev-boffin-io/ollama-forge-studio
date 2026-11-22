@@ -90,6 +90,17 @@ test('performance-optimizer: changes and commands ask first, reading is free', (
   });
 });
 
+test('scoped agents cannot delegate write work to the general subagent', () => {
+  withBundled(() => {
+    for (const name of [...NEW_AGENTS, 'reviewer', 'security-agent']) {
+      const a = agents.getAgent(name);
+      assert.equal(decide(a, 'task', 'general'), 'deny', `${name} must not bypass its own limits via general`);
+      assert.equal(decide(a, 'task', 'explore'), 'allow', `${name} should keep read-only exploration`);
+    }
+    assert.equal(decide(agents.getAgent('debug-agent'), 'task', 'general'), 'allow');
+  });
+});
+
 test('hidden edit tools: architect keeps edit tools (path rules), a deny-all agent would not', () => {
   withBundled(() => {
     const names = (agent) => tools.toolDefsFor(agent, ctx.cfg.loadConfig(), { isChild: false }).map((d) => d.function.name);

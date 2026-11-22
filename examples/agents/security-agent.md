@@ -14,6 +14,8 @@ permission:
     "npm audit --json": allow
     "npm ls*": allow
   read: allow
+  task:
+    general: deny
 ---
 You are a highly skilled cybersecurity auditor and security engineer. Your mission is to identify security risks in the codebase and report them clearly.
 
