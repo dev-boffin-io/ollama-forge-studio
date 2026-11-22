@@ -49,8 +49,14 @@ needed on the target machine):
 ```bash
 npm run build            # → dist/ollama-forge-studio  (dist/ollama-forge-studio.exe on Windows)
 ./dist/ollama-forge-studio ~/my-project
+
+# Optional: embed an extended skill library from <path>/skills (off by default)
+npm run build -- --with-remotes=/path/to/remotes
 ```
 
+- `--with-remotes` embeds `<path>/skills` as a hidden bundled skill layer; the path must contain a `skills/` folder.
+  Only unique skills (by `name`, shallowest copy wins), their `SKILL.md`, and small text resources are embedded, up to 64 MB.
+  The files unpack to `~/.config/ollama-studio/bundled/<hash>/remotes/skills/` and are never listed in the normal skills prompt.
 - Needs **Node ≥ 20.12** (22+ recommended) on the *build* machine; the binary embeds that Node runtime (~100 MB).
 - It can't cross-compile: build on each OS/arch you target. `.github/workflows/release.yml` runs `npm run check` and `npm test` on pushes to `main`/`master` and on pull requests;
   the Linux, macOS and Windows binaries are built only for `v*` tags and manual runs (Actions tab). A `v*` tag also attaches them to a GitHub release (the only job with write access).
@@ -423,8 +429,9 @@ Their tools appear as `<server>_<tool>` and **ask permission by default** (`"mcp
 Plugins add tools, lifecycle hooks and HTTP routes without changing the core. They are loaded from the bundled
 `examples/plugins/` folder (lowest priority), the global `plugins/` folder, the project's `.studio/plugins/`,
 `.claude/plugins/` or `.agents/plugins/`, the project data folder, and `config.plugins.paths`. Disable all of them with
-`"plugins": { "enabled": false }`. Two read-only examples ship with the studio: `now_now` (timestamps and timezones) and
-`json_format` (JSON validation and formatting).
+`"plugins": { "enabled": false }`. Bundled examples ship with the studio: `now_now` (timestamps and timezones),
+`json_format` (JSON validation and formatting), and `http_request` (HTTP/JSON API client with private-network guards,
+env-based secret injection, body caps, and permission prompts).
 
 A plugin is a CommonJS file, a folder with `index.js` / `plugin.js`, or a folder with `plugin.json` (optionally with a
 `main` entry). Plugin tools are always namespaced, so a `docker` plugin with a `ps` tool becomes `docker_ps`:
@@ -575,13 +582,39 @@ In the single-file executable they are embedded at build time (`npm run build`) 
 a real path. Bundled commands and plugins live in `examples/commands/` and `examples/plugins/` and follow the same rules.
 To ship another default agent, skill, command or plugin, drop it into the matching `examples/` folder and rebuild.
 
+**Automatic shortlist:** every turn, the studio ranks local and bundled-remote skills against the latest user message and
+attaches the top 2-3 as `<auto_skills>` in the system prompt; bodies are capped so the vast library stays cheap to use.
+Call the `skill` tool by exact name only when you need the full text. Tune it in `config.json`:
+
+```jsonc
+{ "skills": {
+  "remotesPath": "/path/to/remotes",
+  "auto": {
+    "enabled": true, "count": 3, "minScore": 1,
+    "maxChars": 4000, "totalChars": 12000,
+    "include": [], "exclude": ["noisy-skill"],
+    "fallback": ["test-and-verify", "bug-triage"]
+  }
+} }
+```
+
+`skills.remotesPath` points at the same `<path>` used by `--with-remotes` (it should contain `skills/`), but loads the library
+from disk instead of embedding it — useful when the bundle's 64 MB cap is too small. It is also editable in Settings.
+Set `auto: false` in a skill's frontmatter to keep it out of the shortlist; `include` pins skills, `exclude` blocks names or
+tags. For a large library, add `tags: docker, review` to frontmatter — ranking uses name, description and tags.
+
+**Three-tier loading:** the `skill` tool first loads a normal/local skill by exact name. If that misses, it checks the hidden
+bundled remote layer (build with `--with-remotes=/path/to/remotes`), then falls back to web discovery for topic names.
+Hidden bundled skills are not listed in the prompt, use a real base directory for their files, and are marked untrusted like
+web skills. Local skills always win when the same `name` exists in multiple tiers. Direct `http(s)` URLs keep loading as
+one-off remote skills, and web discovery still requires netcheck, `websearch`/`webfetch`, and normal permission approvals.
+
 ## Extras (optional, off by default)
 
 `extras/` holds things that are useful to some people but would cost prompt tokens for everyone if they shipped as defaults:
 agents `release-manager` and `support-triage`; commands `/review` (deep override) and `/verify`; skills `api-designer`,
-`docker-expert`, `database-migration`; and the plugins `http-request` (tool `http_request`: API client with env-based secret
-injection and a private-network guard) and `text-search` (tool `text_search`: pure Node.js regex/text search, no external
-binaries). They are enabled with `agents.paths`, `commands.paths`, `skills.paths` and
+`docker-expert`, `database-migration`; and the plugin `text-search` (tool `text_search`: pure Node.js regex/text search, no
+external binaries). They are enabled with `agents.paths`, `commands.paths`, `skills.paths` and
 `plugins.paths` in the config; see [`extras/README.md`](extras/README.md). They are not embedded in the single-file executable.
 
 ## Web tools

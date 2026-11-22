@@ -183,6 +183,25 @@ const mkCtx = (messages = [], extra = {}) => ({ agent: { name: 'build' }, config
 const callMsg = (id, name, args) => ({ role: 'assistant', content: '', tool_calls: [{ id, function: { name, arguments: args } }] });
 const errMsg = (id, name) => ({ role: 'tool', tool_name: name, tool_call_id: id, content: JSON.stringify({ error: 'boom' }) });
 
+test('skill tool: passes an authorize function to loadAny for web discovery', async (t) => {
+  const skills = require('../lib/skills');
+  const real = skills.loadAny;
+  let passed;
+  const seen = [];
+  t.after(() => { skills.loadAny = real; });
+  skills.loadAny = async (_name, _config, _opts, authorize) => {
+    passed = authorize;
+    await authorize('websearch', 'topic', 'find remote skill: topic');
+    seen.push('websearch');
+    return 'loaded';
+  };
+  const config = { netcheck: true, remoteSkills: { enabled: true } };
+  const res = await tools.executeTool('skill', { name: 'topic' }, mkCtx([], { config }));
+  assert.equal(res.content, 'loaded');
+  assert.equal(typeof passed, 'function');
+  assert.deepEqual(seen, ['websearch']);
+});
+
 test('doom loop: identical input 5x in a row is refused even if the user granted everything', async () => {
   const args = { command: 'echo hi' };
   const msgs = [];

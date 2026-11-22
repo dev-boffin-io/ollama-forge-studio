@@ -1,6 +1,6 @@
 'use strict';
 
-// http_request: a small API client for the agent (REST / JSON), as an OPTIONAL plugin.
+// http_request: a small API client for the agent (REST / JSON), shipped as a bundled plugin.
 //
 // Why a tool and not `curl` in bash: curl commands are only remembered one by one in the permission engine, the model has to
 // parse raw output itself, and secrets would have to be pasted into the command line (and therefore into the conversation).

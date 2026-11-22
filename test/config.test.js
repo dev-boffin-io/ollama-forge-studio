@@ -38,6 +38,16 @@ test('setWorkDir: launching from the app root falls back to ./workspace', () => 
   cfg.setWorkDir(ctx.dir); // restore for the rest of the file
 });
 
+test('saveConfig: skills patches keep existing skill settings', () => {
+  const before = cfg.loadConfig();
+  cfg.saveConfig({ skills: { remotesPath: '/tmp/remotes' } });
+  const after = cfg.loadConfig();
+  assert.equal(after.skills.remotesPath, '/tmp/remotes');
+  assert.deepEqual(after.skills.paths, before.skills.paths);
+  assert.deepEqual(after.skills.auto, before.skills.auto);
+  cfg.saveConfig({ skills: { remotesPath: '' } });
+});
+
 test('loadConfig: defaults, global and local layers', () => {
   assert.equal(cfg.VIRTUAL_PREFIX, '.studio');
   const defaults = cfg.loadConfig();

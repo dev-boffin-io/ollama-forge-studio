@@ -12,10 +12,9 @@ prompt tokens on every request). Things that are useful to *some* people live he
 | `skills/api-designer` | REST / GraphQL / JSON-RPC design with a validated contract | – |
 | `skills/docker-expert` | Dockerfile + compose hardening, verified by building | Docker (optional, for verifying) |
 | `skills/database-migration` | safe migrations, expand→contract, rollback, dry run | the project's migration tool |
-| `plugins/http-request` | tool `http_request`: API client with secret injection, private-network guard, size caps | – (Node 18+) |
 | `plugins/text-search` | tool `text_search`: pure Node.js regex/text file search | – (Node 18+) |
 
-`bug-triage` and `i18n-l10n` are now bundled defaults in `examples/skills/`.
+`bug-triage` and `i18n-l10n` are now bundled defaults in `examples/skills/`. `http-request` is now a bundled default in `examples/plugins/`.
 
 ## Enable (config.json, global or per project)
 

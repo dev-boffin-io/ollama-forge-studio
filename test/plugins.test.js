@@ -142,11 +142,15 @@ test('bundled example plugins load, register tools and respect plugins.enabled:f
     assert.equal(status.errors.length, 0, JSON.stringify(status.errors));
     const now = status.plugins.find((p) => p.name === 'now');
     const json = status.plugins.find((p) => p.name === 'json');
-    assert.ok(now && json, 'both bundled plugins should load');
+    const http = status.plugins.find((p) => p.name === 'http');
+    assert.ok(now && json && http, 'all bundled plugins should load');
     assert.deepEqual(now.tools, ['now_now']);
     assert.deepEqual(json.tools, ['json_format']);
+    assert.deepEqual(http.tools, ['http_request']);
     assert.equal(now.dir, path.join(ROOT, 'examples', 'plugins', 'now'));
     assert.equal(json.dir, path.join(ROOT, 'examples', 'plugins', 'json-format'));
+    assert.equal(http.dir, path.join(ROOT, 'examples', 'plugins', 'http-request'));
+    assert.equal(plugins.isTool('http_request'), true);
 
     const t = await plugins.callTool('now_now', { utc: true });
     assert.match(t.iso, /^\d{4}-\d{2}-\d{2}T/);

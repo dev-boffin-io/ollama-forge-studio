@@ -9,6 +9,7 @@ const { setup } = require('./helpers');
 const ctx = setup();
 const ROOT = path.resolve(__dirname, '..');
 const EXTRAS = path.join(ROOT, 'extras');
+const EXAMPLES = path.join(ROOT, 'examples');
 const agents = require('../lib/agents');
 const commands = require('../lib/commands');
 const skills = require('../lib/skills');
@@ -165,7 +166,7 @@ async function loadHttp(extraCfg = {}) {
   const dir = path.join(ctx.studioDir, 'plugins');
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(path.join(dir, 'http-request'), { recursive: true });
-  fs.copyFileSync(path.join(EXTRAS, 'plugins', 'http-request', 'plugin.js'), path.join(dir, 'http-request', 'plugin.js'));
+  fs.copyFileSync(path.join(EXAMPLES, 'plugins', 'http-request', 'plugin.js'), path.join(dir, 'http-request', 'plugin.js'));
   const status = await plugins.load({ ...ctx.cfg.loadConfig(), http: { allowPrivate: [`127.0.0.1:${port}`], ...extraCfg } });
   assert.equal(status.errors.length, 0, JSON.stringify(status.errors));
   assert.ok(plugins.isTool('http_request'));
@@ -234,7 +235,7 @@ test('http_request: timeout is reported clearly', async () => {
 });
 
 test('http_request: helper functions (private IP detection, host patterns, JSON paths)', () => {
-  const { isPrivateIp, hostMatches, getPath } = require('../extras/plugins/http-request/plugin.js').__test;
+  const { isPrivateIp, hostMatches, getPath } = require('../examples/plugins/http-request/plugin.js').__test;
   for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1']) assert.equal(isPrivateIp(ip), true, ip);
   for (const ip of ['8.8.8.8', '1.1.1.1', '172.32.0.1', '2606:4700:4700::1111', '::ffff:8.8.8.8']) assert.equal(isPrivateIp(ip), false, ip);
   assert.equal(hostMatches('api.github.com', ['*.github.com']), true);

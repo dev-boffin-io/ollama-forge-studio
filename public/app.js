@@ -110,6 +110,7 @@ function openSettings() {
   $('sWake').value = String(c.wakeOnProcessExit !== false);
   $('sNetcheck').checked = c.netcheck !== false;
   $('sRemoteSkills').checked = !c.remoteSkills || c.remoteSkills.enabled !== false;
+  $('sSkillsRemotesPath').value = (c.skills && c.skills.remotesPath) || '';
   if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
 }
 
@@ -127,10 +128,12 @@ async function resetSettings() {
     $('sWake').value = String(def.wakeOnProcessExit !== false);
     $('sNetcheck').checked = def.netcheck !== false;
     $('sRemoteSkills').checked = !def.remoteSkills || def.remoteSkills.enabled !== false;
+    $('sSkillsRemotesPath').value = (def.skills && def.skills.remotesPath) || '';
     const patch = {
       wakeOnProcessExit: def.wakeOnProcessExit,
       netcheck: def.netcheck,
       remoteSkills: def.remoteSkills,
+      skills: def.skills,
       thinking: def.thinking,
       temperature: def.temperature,
       numCtx: def.numCtx,
@@ -156,6 +159,7 @@ async function saveSettings() {
     wakeOnProcessExit: $('sWake').value === 'true',
     netcheck: $('sNetcheck').checked,
     remoteSkills: { ...((state.config && state.config.remoteSkills) || {}), enabled: $('sRemoteSkills').checked },
+    skills: { ...((state.config && state.config.skills) || {}), remotesPath: $('sSkillsRemotesPath').value.trim() },
   };
   state.config = await api('/api/config', { method: 'PUT', body: JSON.stringify(patch) });
   state.model = state.config.model;

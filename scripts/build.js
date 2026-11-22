@@ -5,6 +5,7 @@
  * Build a single self-contained executable (Node SEA) for the CURRENT platform.
  *
  *   node scripts/build.js            ->  dist/ollama-forge-studio[.exe]
+ *   node scripts/build.js --with-remotes=/path/to/remotes  ->  also embeds <path>/skills as a hidden skill layer
  *
  * Steps: bundle server.js + lib/*.js into one CommonJS file (tiny built-in bundler, no deps),
  * embed public/* and the bundled examples/{agents,skills,commands,plugins} as SEA assets (+ a manifest, see lib/bundled.js), generate the blob, copy the running `node` binary and inject the blob.
@@ -22,6 +23,21 @@ const NAME = 'ollama-forge-studio';
 const isWin = process.platform === 'win32';
 const isMac = process.platform === 'darwin';
 const OUT = path.join(DIST, NAME + (isWin ? '.exe' : ''));
+
+const REMOTE_MAX_BYTES = 64 * 1024 * 1024;
+const REMOTE_FILE_MAX_BYTES = 256 * 1024;
+const REMOTE_SKIP_DIRS = new Set(['.git', '.github', 'node_modules', 'tests', 'test', '__tests__', 'fixtures']);
+const REMOTE_TEXT_EXT = new Set(['.md', '.txt', '.json', '.yaml', '.yml', '.js', '.mjs', '.cjs', '.ts', '.py', '.sh', '.rb', '.go', '.rs', '.java']);
+
+const args = process.argv.slice(2);
+const remotesIndex = args.findIndex((a) => a === '--with-remotes' || a.startsWith('--with-remotes='));
+let REMOTES = null;
+if (remotesIndex >= 0) {
+  const arg = args[remotesIndex];
+  const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[remotesIndex + 1];
+  REMOTES = path.resolve(ROOT, value && !value.startsWith('--') ? value : 'remotes');
+  if (!fs.existsSync(path.join(REMOTES, 'skills'))) throw new Error(`--with-remotes: ${path.join(REMOTES, 'skills')} does not exist`);
+}
 
 const [major, minor] = process.versions.node.split('.').map(Number);
 if (major < 20 || (major === 20 && minor < 12)) {
@@ -104,18 +120,86 @@ const assets = {};
 // the hash changes with any file's name, mode or content and names the directory they are unpacked to.
 const EXAMPLES = path.join(ROOT, 'examples');
 const bundledFiles = [];
-for (const sub of ['agents', 'skills', 'commands', 'plugins']) {
+const collect = (root, prefix) => {
   (function walk(dir) {
     if (!fs.existsSync(dir)) return;
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const f = path.join(dir, e.name);
       if (e.isDirectory()) walk(f);
       else if (e.isFile() && !['.DS_Store', 'Thumbs.db'].includes(e.name)) {
-        bundledFiles.push({ file: f, rel: path.relative(EXAMPLES, f).split(path.sep).join('/'), exec: (fs.statSync(f).mode & 0o111) !== 0 });
+        const rel = path.posix.join(prefix, path.relative(root, f).split(path.sep).join('/'));
+        bundledFiles.push({ file: f, rel, exec: (fs.statSync(f).mode & 0o111) !== 0 });
       }
     }
-  })(path.join(EXAMPLES, sub));
+  })(root);
+};
+for (const sub of ['agents', 'skills', 'commands', 'plugins']) collect(path.join(EXAMPLES, sub), sub);
+
+function skillNameOf(file) {
+  const text = fs.readFileSync(file, 'utf8').slice(0, 8192);
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  const match = frontmatter && /(?:^|\n)\s*name\s*:\s*['"]?([^\r\n'"#]+)/.exec(frontmatter[1]);
+  return match ? match[1].trim() : null;
 }
+
+function collectRemoteSkills(root, prefix) {
+  const bases = [];
+  (function walk(dir) {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    if (entries.some((e) => e.name === 'SKILL.md' && e.isFile())) { bases.push(dir); return; }
+    for (const e of entries) {
+      if (!REMOTE_SKIP_DIRS.has(e.name) && e.isDirectory()) walk(path.join(dir, e.name));
+    }
+  })(root);
+
+  const depth = (dir) => path.relative(root, dir).split(path.sep).length;
+  bases.sort((a, b) => depth(a) - depth(b) || a.localeCompare(b));
+  const seen = new Set();
+  const picked = [];
+  for (const base of bases) {
+    const name = skillNameOf(path.join(base, 'SKILL.md'));
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    picked.push(base);
+  }
+
+  const relOf = (file) => path.posix.join(prefix, path.relative(root, file).split(path.sep).join('/'));
+  const files = [];
+  let bytes = 0;
+  const add = (file, size) => {
+    if (bytes + size > REMOTE_MAX_BYTES) throw new Error(`--with-remotes: embedded skill payload exceeds ${REMOTE_MAX_BYTES / 1048576} MB; trim ${root}`);
+    files.push({ file, rel: relOf(file), exec: (fs.statSync(file).mode & 0o111) !== 0 });
+    bytes += size;
+  };
+
+  for (const base of picked) {
+    const file = path.join(base, 'SKILL.md');
+    const size = fs.statSync(file).size;
+    add(file, size);
+  }
+
+  let skipped = bases.length - picked.length;
+  for (const base of picked) {
+    (function walk(dir) {
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (REMOTE_SKIP_DIRS.has(e.name)) continue;
+        const file = path.join(dir, e.name);
+        if (e.isDirectory()) { walk(file); continue; }
+        if (!e.isFile() || e.name === 'SKILL.md' || !REMOTE_TEXT_EXT.has(path.extname(e.name).toLowerCase())) continue;
+        const size = fs.statSync(file).size;
+        if (size > REMOTE_FILE_MAX_BYTES || bytes + size > REMOTE_MAX_BYTES) { skipped++; continue; }
+        add(file, size);
+      }
+    })(base);
+  }
+  console.log(`embedding ${picked.length} remote skills (${(bytes / 1048576).toFixed(1)} MB${skipped ? `, ${skipped} skipped/duplicates` : ''})`);
+  return files;
+}
+
+if (REMOTES) bundledFiles.push(...collectRemoteSkills(path.join(REMOTES, 'skills'), 'remotes/skills'));
 bundledFiles.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 const hash = require('node:crypto').createHash('sha256');
 for (const f of bundledFiles) {
@@ -126,7 +210,7 @@ const manifestPath = path.join(DIST, 'examples-manifest.json');
 fs.writeFileSync(manifestPath, JSON.stringify({ hash: hash.digest('hex'), files: bundledFiles.map((f) => ({ path: f.rel, exec: f.exec })) }));
 assets['examples/manifest.json'] = manifestPath;
 
-console.log(`embedding ${Object.keys(assets).length} assets (${bundledFiles.length} bundled example files): ${Object.keys(assets).join(', ')}`);
+console.log(`embedding ${Object.keys(assets).length} assets (${bundledFiles.length} bundled files${REMOTES ? `, including remotes from ${REMOTES}` : ''}): ${Object.keys(assets).join(', ')}`);
 
 const seaConfig = path.join(DIST, 'sea-config.json');
 const blob = path.join(DIST, 'sea-prep.blob');
