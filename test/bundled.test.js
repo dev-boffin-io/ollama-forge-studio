@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { setup } = require('./helpers');
 
 const ctx = setup();
@@ -185,4 +186,21 @@ test('unpacked commands and plugins load through the normal loaders', async () =
     hooks.reset();
     fs.rmSync(dest, { recursive: true, force: true });
   }
+});
+
+test('build: remote size flags reject invalid values before building', () => {
+  for (const flag of ['--remote-max-mb=0', '--remote-file-max-kb=abc']) {
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'build.js'), flag], { cwd: ROOT, encoding: 'utf8' });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, new RegExp(`${flag.split('=')[0]}: expected a positive number`));
+    assert.doesNotMatch(r.stderr, /bundled \d+ modules/);
+  }
+});
+
+test('build: valid remote size flags are accepted with --with-remotes', () => {
+  const missing = path.join(ctx.dir, 'missing-remotes');
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'build.js'), `--with-remotes=${missing}`, '--remote-max-mb=256', '--remote-file-max-kb=2048'], { cwd: ROOT, encoding: 'utf8' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /does not exist/);
+  assert.doesNotMatch(r.stderr, /expected a positive number/);
 });

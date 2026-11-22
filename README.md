@@ -52,10 +52,13 @@ npm run build            # → dist/ollama-forge-studio  (dist/ollama-forge-stud
 
 # Optional: embed an extended skill library from <path>/skills (off by default)
 npm run build -- --with-remotes=/path/to/remotes
+npm run build -- --with-remotes=/path/to/remotes --remote-max-mb=256 --remote-file-max-kb=2048
 ```
 
 - `--with-remotes` embeds `<path>/skills` as a hidden bundled skill layer; the path must contain a `skills/` folder.
-  Only unique skills (by `name`, shallowest copy wins), their `SKILL.md`, and small text resources are embedded, up to 64 MB.
+  Only unique skills (by `name`, shallowest copy wins), their `SKILL.md`, and text resources are embedded, up to 64 MB with a
+  256 KB per-file cap by default. Raise them with `--remote-max-mb` / `--remote-file-max-kb` (or use `skills.remotesPath` to
+  load from disk instead). Larger payloads mean a much larger binary and can make `postject` fail.
   The files unpack to `~/.config/ollama-studio/bundled/<hash>/remotes/skills/` and are never listed in the normal skills prompt.
 - Needs **Node ≥ 20.12** (22+ recommended) on the *build* machine; the binary embeds that Node runtime (~100 MB).
 - It can't cross-compile: build on each OS/arch you target. `.github/workflows/release.yml` runs `npm run check` and `npm test` on pushes to `main`/`master` and on pull requests;
@@ -610,7 +613,7 @@ Call the `skill` tool by exact name only when you need the full text. Tune it in
 ```
 
 `skills.remotesPath` points at the same `<path>` used by `--with-remotes` (it should contain `skills/`), but loads the library
-from disk instead of embedding it — useful when the bundle's 64 MB cap is too small. It is also editable in Settings.
+from disk instead of embedding it — useful when the default 64 MB embed cap is too small. It is also editable in Settings.
 Set `auto: false` in a skill's frontmatter to keep it out of the shortlist; `include` pins skills, `exclude` blocks names or
 tags. For a large library, add `tags: docker, review` to frontmatter — ranking uses name, description and tags.
 

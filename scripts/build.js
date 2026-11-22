@@ -6,6 +6,7 @@
  *
  *   node scripts/build.js            ->  dist/ollama-forge-studio[.exe]
  *   node scripts/build.js --with-remotes=/path/to/remotes  ->  also embeds <path>/skills as a hidden skill layer
+ *   node scripts/build.js --with-remotes --remote-max-mb=256 --remote-file-max-kb=2048  ->  larger embedded library
  *
  * Steps: bundle server.js + lib/*.js into one CommonJS file (tiny built-in bundler, no deps),
  * embed public/* and the bundled examples/{agents,skills,commands,plugins} as SEA assets (+ a manifest, see lib/bundled.js), generate the blob, copy the running `node` binary and inject the blob.
@@ -24,8 +25,8 @@ const isWin = process.platform === 'win32';
 const isMac = process.platform === 'darwin';
 const OUT = path.join(DIST, NAME + (isWin ? '.exe' : ''));
 
-const REMOTE_MAX_BYTES = 64 * 1024 * 1024;
-const REMOTE_FILE_MAX_BYTES = 256 * 1024;
+let REMOTE_MAX_BYTES = 64 * 1024 * 1024;
+let REMOTE_FILE_MAX_BYTES = 256 * 1024;
 const REMOTE_SKIP_DIRS = new Set(['.git', '.github', 'node_modules', 'tests', 'test', '__tests__', 'fixtures']);
 const REMOTE_TEXT_EXT = new Set(['.md', '.txt', '.json', '.yaml', '.yml', '.js', '.mjs', '.cjs', '.ts', '.py', '.sh', '.rb', '.go', '.rs', '.java']);
 
@@ -38,6 +39,17 @@ if (remotesIndex >= 0) {
   REMOTES = path.resolve(ROOT, value && !value.startsWith('--') ? value : 'remotes');
   if (!fs.existsSync(path.join(REMOTES, 'skills'))) throw new Error(`--with-remotes: ${path.join(REMOTES, 'skills')} does not exist`);
 }
+
+function sizeFlag(name, fallback, unitBytes) {
+  const i = args.findIndex((a) => a === name || a.startsWith(name + '='));
+  if (i < 0) return fallback;
+  const raw = args[i].includes('=') ? args[i].slice(args[i].indexOf('=') + 1) : args[i + 1];
+  const value = Number(raw);
+  if (!raw || String(raw).startsWith('--') || !Number.isFinite(value) || value <= 0) throw new Error(`${name}: expected a positive number`);
+  return Math.round(value * unitBytes);
+}
+REMOTE_MAX_BYTES = sizeFlag('--remote-max-mb', REMOTE_MAX_BYTES, 1024 * 1024);
+REMOTE_FILE_MAX_BYTES = sizeFlag('--remote-file-max-kb', REMOTE_FILE_MAX_BYTES, 1024);
 
 const [major, minor] = process.versions.node.split('.').map(Number);
 if (major < 20 || (major === 20 && minor < 12)) {
@@ -168,7 +180,7 @@ function collectRemoteSkills(root, prefix) {
   const files = [];
   let bytes = 0;
   const add = (file, size) => {
-    if (bytes + size > REMOTE_MAX_BYTES) throw new Error(`--with-remotes: embedded skill payload exceeds ${REMOTE_MAX_BYTES / 1048576} MB; trim ${root}`);
+    if (bytes + size > REMOTE_MAX_BYTES) throw new Error(`--with-remotes: embedded skill payload exceeds ${REMOTE_MAX_BYTES / 1048576} MB; raise --remote-max-mb or trim ${root}`);
     files.push({ file, rel: relOf(file), exec: (fs.statSync(file).mode & 0o111) !== 0 });
     bytes += size;
   };
@@ -195,7 +207,7 @@ function collectRemoteSkills(root, prefix) {
       }
     })(base);
   }
-  console.log(`embedding ${picked.length} remote skills (${(bytes / 1048576).toFixed(1)} MB${skipped ? `, ${skipped} skipped/duplicates` : ''})`);
+  console.log(`embedding ${picked.length} remote skills (${(bytes / 1048576).toFixed(1)} / ${REMOTE_MAX_BYTES / 1048576} MB, ${REMOTE_FILE_MAX_BYTES / 1024} KB file cap${skipped ? `, ${skipped} skipped/duplicates` : ''})`);
   return files;
 }
 
