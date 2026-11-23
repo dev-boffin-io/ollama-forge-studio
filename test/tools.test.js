@@ -2,7 +2,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setup } = require('./helpers');
-const os = require("node:os");
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const ctx = setup();
 const tools = require('../lib/tools');
@@ -342,5 +344,23 @@ test('write_file / edit_file / delete_file return git-style diffs; ui_diff exist
     process.env.OLLAMA_STUDIO_HOME = prev;
     cfg._cache = null;
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('edit_file rejects a whole file squashed into one line with literal \\n escapes', async () => {
+  const file = path.join(ctx.dir, 'c.json');
+  const mk = () => ({ agent: { name: 'build' }, config: ctx.cfg.loadConfig(), session: { id: 's2', messages: [], journal: [], turn: 0 }, root: { journal: [], turn: 0 }, inherited: [], emit: () => {}, askPermission: async () => 'once', askUser: async () => '' });
+  try {
+    fs.writeFileSync(file, '{"a":1}\n');
+    const blob = '{\\n  \\"providers\\": [\\n    {\\n      \\"name\\": \\"x\\",\\n      \\"keys\\": [\\n        {\\"id\\": \\"k1\\"}\\n      ]\\n    }\\n  ]\\n}'.repeat(2);
+    await assert.rejects(() => tools.executeTool('edit_file', { path: 'c.json', old_string: '{"a":1}', new_string: blob }, mk()), /squashed into one line/);
+    await assert.rejects(() => tools.executeTool('multi_edit', { path: 'c.json', edits: [{ old_string: 'a', new_string: blob }] }, mk()), /squashed into one line/);
+    // normal multi-line edit and the allow_escapes escape hatch still work
+    const ok = await tools.executeTool('edit_file', { path: 'c.json', old_string: '"a":1', new_string: '"a":2' }, mk());
+    assert.equal(ok.ok, true);
+    const ok2 = await tools.executeTool('edit_file', { path: 'c.json', old_string: '"a":2', new_string: JSON.stringify(blob), allow_escapes: true }, mk());
+    assert.equal(ok2.ok, true);
+  } finally {
+    fs.rmSync(file, { force: true });
   }
 });

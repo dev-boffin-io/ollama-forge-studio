@@ -38,6 +38,14 @@ test('safeResolve: symlink escapes are blocked', () => {
   fs.symlinkSync(outside, path.join(cfg.getWorkDir(), 'link'));
   assert.throws(() => ws.safeResolve('link/secret.txt'), /symlink/);
   assert.throws(() => ws.safeResolve('link'), /symlink/);
+  const prevAllowSymlinks = process.env.STUDIO_ALLOW_SYMLINKS;
+  try {
+    process.env.STUDIO_ALLOW_SYMLINKS = '1';
+    assert.doesNotThrow(() => ws.safeResolve('link/secret.txt'));
+  } finally {
+    if (prevAllowSymlinks === undefined) delete process.env.STUDIO_ALLOW_SYMLINKS;
+    else process.env.STUDIO_ALLOW_SYMLINKS = prevAllowSymlinks;
+  }
   fs.rmSync(outside, { recursive: true, force: true });
 });
 
