@@ -1,7 +1,13 @@
-# Ollama Forge Studio v1.0
+# Ollama Forge Studio v1.1.0
 
 An agentic coding studio for any Ollama endpoint (local or a Cloudflare tunnel URL).
-Zero runtime dependencies — Node 18+ (Node 22.5+ for long-term memory / recall, which needs `node:sqlite`).
+Zero runtime dependencies. Requirements:
+
+| Use | Node version |
+|---|---|
+| Running from source | 18+ (22.5+ for long-term memory / recall, which needs `node:sqlite`) |
+| Building the single binary (`npm run build`) | 20.12+ (22+ recommended) |
+
 
 ```
 Browser ──HTTP/SSE──► server.js ──REST──► Ollama endpoint
