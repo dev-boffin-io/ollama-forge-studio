@@ -38,16 +38,22 @@ with the binary, copy the folders you want into the global `agents/`, `commands/
 
 ```json
 "http": {
-  "allowHosts":   ["api.github.com", "*.example.com"],
-  "allowPrivate": ["localhost:3000"],
-  "allowEnv":     ["GITHUB_TOKEN"],
-  "maxBytes":     20000
+  "allowHosts":     ["api.github.com", "*.example.com"],
+  "allowPrivate":   ["localhost:3000"],
+  "allowEnv":       ["GITHUB_TOKEN"],
+  "maxBytes":       2000000,
+  "followRedirects": false,
+  "maxRedirects":   5
 }
 ```
 
 - Headers may use `{{env:GITHUB_TOKEN}}`; only variables in `allowEnv` are substituted, so the model never sees the secret.
 - Public hosts: allowed unless `allowHosts` is set (then only those). Hosts that resolve to loopback / private / link-local
-  addresses ask first, unless listed in `allowPrivate`. Redirects are never followed.
+  addresses ask first, unless listed in `allowPrivate`.
+- Compact by default. Per call, opt into `include_request` (method, URL, redacted headers and request body),
+  `include_headers` (all response headers), `full_body` (up to `maxBytes`, default 2 MB / hard cap 50 MB),
+  `as_base64` (raw bytes), `body_base64` (binary upload), `save_to` (workspace-relative download), `follow_redirects`
+  and `max_redirects`. Redirects recheck hosts/private-address rules and drop sensitive headers when origin changes.
 - Plugin tools ask by default (`plugin` permission, the pattern is the tool name only, so per-host rules are done by the
   plugin's own config above). **It runs in the studio process, not in the Docker sandbox.**
 

@@ -156,6 +156,7 @@ test('the bundled examples/ folder contains none of the extras', () => {
 /* ---------- http_request plugin ---------- */
 
 let server; let port;
+const BINARY = Buffer.from([0, 1, 2, 253, 254, 255]);
 test('http_request: set up a local test server', async () => {
   server = http.createServer((req, res) => {
     let body = '';
@@ -163,6 +164,7 @@ test('http_request: set up a local test server', async () => {
     req.on('end', () => {
       if (req.url === '/redirect') { res.writeHead(302, { Location: '/json' }); return res.end(); }
       if (req.url === '/text') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('x'.repeat(5000)); }
+      if (req.url === '/binary') { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); return res.end(BINARY); }
       if (req.url === '/slow') return setTimeout(() => res.end('late'), 3000);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ method: req.method, auth: req.headers.authorization || null, ctype: req.headers['content-type'] || null, got: body ? JSON.parse(body) : null, data: { items: [{ id: 1, n: 'a' }, { id: 2, n: 'b' }], total: 2 } }));
@@ -204,6 +206,9 @@ test('http_request: POST json sets the content type; redirects are not followed;
   assert.equal(body.method, 'POST');
   assert.equal(body.ctype, 'application/json');
   assert.deepEqual(body.got, { a: 1 });
+  const raw = parse(await call({ method: 'POST', url: `http://127.0.0.1:${port}/x`, body: '{"raw":true}' }));
+  assert.match(JSON.parse(raw.body).ctype, /text\/plain/);
+  assert.deepEqual(JSON.parse(raw.body).got, { raw: true });
   const red = parse(await call({ url: `http://127.0.0.1:${port}/redirect` }));
   assert.equal(red.status, 302);
   assert.equal(red.headers.location, '/json');
@@ -211,6 +216,54 @@ test('http_request: POST json sets the content type; redirects are not followed;
   const big = parse(await call({ url: `http://127.0.0.1:${port}/text`, max_bytes: 1000 }));
   assert.equal(big.body.length, 1000);
   assert.match(big.truncated, /4000 more/);
+});
+
+test('http_request: request details are viewable and env-backed header values stay redacted', async () => {
+  await loadHttp({ allowEnv: ['STUDIO_TEST_VIEW_TOKEN'] });
+  process.env.STUDIO_TEST_VIEW_TOKEN = 'hidden-token';
+  const r = parse(await call({
+    method: 'POST',
+    url: `http://127.0.0.1:${port}/x`,
+    headers: { 'X-Secret': 'Bearer {{env:STUDIO_TEST_VIEW_TOKEN}}' },
+    json: { a: 1 },
+    include_request: true,
+  }));
+  assert.equal(r.request.method, 'POST');
+  assert.equal(r.request.url, `http://127.0.0.1:${port}/x`);
+  assert.equal(r.request.body, '{"a":1}');
+  assert.match(r.request.headers['X-Secret'], /redacted:STUDIO_TEST_VIEW_TOKEN/);
+  assert.ok(!JSON.stringify(r).includes('hidden-token'));
+});
+
+test('http_request: full_body returns the complete response and include_headers exposes all headers', async () => {
+  await loadHttp({ maxBytes: 10000 });
+  const r = parse(await call({ url: `http://127.0.0.1:${port}/text`, max_bytes: 1000, full_body: true, include_headers: true }));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.length, 5000);
+  assert.equal(r.truncated, undefined);
+  assert.ok(r.headers['content-type']);
+});
+
+test('http_request: supports OPTIONS and opt-in redirects with the same safety checks', async () => {
+  await loadHttp();
+  const opt = parse(await call({ method: 'OPTIONS', url: `http://127.0.0.1:${port}/x` }));
+  assert.equal(JSON.parse(opt.body).method, 'OPTIONS');
+  const red = parse(await call({ url: `http://127.0.0.1:${port}/redirect`, follow_redirects: true }));
+  assert.equal(red.status, 200);
+  assert.equal(red.redirects[0].status, 302);
+  assert.match(red.redirects[0].to, /\/json$/);
+  assert.equal(JSON.parse(red.body).method, 'GET');
+});
+
+test('http_request: binary responses can be returned as base64 or saved inside the workspace', async () => {
+  await loadHttp();
+  const b = parse(await call({ url: `http://127.0.0.1:${port}/binary`, as_base64: true }));
+  assert.equal(b.body_base64, BINARY.toString('base64'));
+  const dest = 'downloads/bytes.bin';
+  const s = parse(await call({ url: `http://127.0.0.1:${port}/binary`, save_to: dest }));
+  assert.deepEqual(fs.readFileSync(path.join(ctx.dir, dest)), BINARY);
+  assert.equal(s.saved.bytes, BINARY.length);
+  await assert.rejects(() => call({ url: `http://127.0.0.1:${port}/binary`, save_to: '../escape.bin' }), /escapes the working directory/);
 });
 
 test('http_request: secrets come from allowEnv only and never from the model', async () => {

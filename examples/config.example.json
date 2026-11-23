@@ -19,6 +19,14 @@
   "hooks": {},
   "verify": { "enabled": true, "onEdit": true, "final": true, "command": "", "maxFixRounds": 4, "maxFinalRounds": 3 },
   "plugins": { "enabled": true, "paths": [] },
+  "http": {
+    "allowHosts": [],
+    "allowPrivate": [],
+    "allowEnv": [],
+    "maxBytes": 2000000,
+    "followRedirects": false,
+    "maxRedirects": 5
+  },
   "sandbox": {
     "enabled": false,
     "image": "node:20-bookworm",

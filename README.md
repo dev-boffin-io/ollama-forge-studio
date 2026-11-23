@@ -435,8 +435,8 @@ Plugins add tools, lifecycle hooks and HTTP routes without changing the core. Th
 `examples/plugins/` folder (lowest priority), the global `plugins/` folder, the project's `.studio/plugins/`,
 `.claude/plugins/` or `.agents/plugins/`, the project data folder, and `config.plugins.paths`. Disable all of them with
 `"plugins": { "enabled": false }`. Bundled examples ship with the studio: `now_now` (timestamps and timezones),
-`json_format` (JSON validation and formatting), and `http_request` (HTTP/JSON API client with private-network guards,
-env-based secret injection, body caps, and permission prompts).
+`json_format` (JSON validation and formatting), and `http_request` (full HTTP/JSON client with private-network guards,
+env-based secret injection, opt-in full/binary bodies, redirect and download support, and permission prompts).
 
 A plugin is a CommonJS file, a folder with `index.js` / `plugin.js`, or a folder with `plugin.json` (optionally with a
 `main` entry). Plugin tools are always namespaced, so a `docker` plugin with a `ps` tool becomes `docker_ps`:
