@@ -161,6 +161,154 @@ const agentInfo = (a) => ({ name: a.name, description: a.description || '', mode
 
 /* ---------- API ---------- */
 
+/* Session CRUD, messages and summaries. Sends a response itself, or returns with nothing sent to fall through. */
+async function handleSessionsApi(req, res, url, seg, method) {
+  const { pathname } = url;
+  if (seg[1] === 'sessions') {
+    if (seg.length === 2) {
+      if (method === 'GET') return sendJson(res, 200, { sessions: (await sessions.list()).map((r) => ({ ...r, running: running.has(r.id) })) });
+      if (method === 'POST') {
+        const b = await readBody(req);
+        const c = cfg.loadConfig();
+        return sendJson(res, 201, await sessions.create({ agent: b.agent || c.agent || 'build', model: b.model || c.model, title: b.title || '' }));
+      }
+    }
+    const id = seg[2];
+    if (seg.length === 3) {
+      if (method === 'GET') {
+        const s = await sessions.get(id);
+        // `history` = messages that were summarised out of the model's context: the chat still shows them unchanged (huge tool output is clipped for transport)
+        const history = (await sessions.archiveRead(id, s.archived || 0)).map((m) => (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 20000 ? { ...m, content: m.content.slice(0, 20000) + '\n… (clipped in the chat view; /export has everything)' } : m));
+        return sendJson(res, 200, { ...s, history, running: running.has(id), context: await contextInfo(s.model, s) });
+      }
+      if (method === 'DELETE') { running.get(id)?.ac.abort(); return sendJson(res, 200, await sessions.remove(id)); }
+      if (method === 'PUT' || method === 'PATCH') {
+        const b = await readBody(req);
+        const s = await sessions.get(id);
+        if (typeof b.title === 'string') s.title = b.title.slice(0, 120);
+        if (typeof b.agent === 'string' && agents.getAgent(b.agent, cfg.loadConfig())) s.agent = b.agent;
+        if (typeof b.model === 'string') s.model = b.model;
+        await sessions.save(s);
+        return sendJson(res, 200, sessions.summary(s));
+      }
+    }
+    if (seg.length === 4 && seg[3] === 'fork' && method === 'POST') {
+      const b = await readBody(req);
+      return sendJson(res, 201, await sessions.fork(id, b.upTo));
+    }
+    if (seg.length === 4 && seg[3] === 'rewind' && method === 'POST') {          // drop a user message and everything after it (Edit / Resend)
+      if (running.has(id)) throw new Error('session is running; stop it first');
+      const b = await readBody(req);
+      const s = await sessions.get(id);
+      const i = Number(b.index);
+      if (!Number.isInteger(i) || i < 0 || i >= s.messages.length || s.messages[i].role !== 'user' || s.messages[i].summary) throw new Error('can only rewind to one of your own messages');
+      s.messages = s.messages.slice(0, i);
+      s.lastPrompt = 0; s.lastCount = 0; s.revert = null; s.interrupted = false;
+      await sessions.save(s);
+      return sendJson(res, 200, { ok: true, messages: i });
+    }
+    if (seg.length === 5 && seg[3] === 'messages' && (method === 'PATCH' || method === 'PUT')) {   // edit an assistant reply in place
+      if (running.has(id)) throw new Error('session is running; stop it first');
+      const b = await readBody(req);
+      const s = await sessions.get(id);
+      const m = s.messages[parseInt(seg[4], 10)];
+      if (!m || m.summary || m.role !== 'assistant' || typeof b.content !== 'string') throw new Error('only assistant replies can be edited in place');
+      m.content = b.content;
+      await sessions.save(s);
+      return sendJson(res, 200, { ok: true });
+    }
+    if (seg.length === 4 && seg[3] === 'compact' && method === 'POST') {
+      const c = cfg.loadConfig();
+      const s = await sessions.get(id);
+      const r = await compactSession({ session: s, model: s.model || c.model, config: c });
+      return sendJson(res, 200, r);
+    }
+    if (seg.length === 4 && (seg[3] === 'undo' || seg[3] === 'redo') && method === 'POST') {
+      if (running.has(id)) throw new Error('session is running; stop it first');
+      const s = await sessions.get(id);
+      const r = seg[3] === 'undo' ? await journal.undo(s) : await journal.redo(s);
+      await sessions.save(s);
+      return sendJson(res, 200, r);
+    }
+    if (seg.length === 4 && seg[3] === 'export' && method === 'GET') {
+      const format = url.searchParams.get('format') === 'json' ? 'json' : 'md';
+      if (format === 'json') return sendJson(res, 200, await sessions.exportTree(id), { 'Content-Disposition': `attachment; filename="${id}.json"` });
+      const s = await sessions.get(id);
+      const md = require('./lib/export').toMarkdown(s, await sessions.transcript(s));
+      res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="${id}.md"` });
+      return res.end(md);
+    }
+    if (seg.length === 4 && seg[3] === 'summaries' && method === 'GET') {
+      const s = await sessions.get(id);
+      let list = s.summaries || [];
+      if (!list.length) {   // sessions summarised before summaries were recorded: show the live one
+        const live = s.messages.find((x) => x.summary && x.role === 'user');
+        if (live) list = [{ n: 1, ts: s.updatedAt, text: live.content.replace(/^Summary of the earlier conversation:\n/, ''), covered: null, legacy: true }];
+      }
+      return sendJson(res, 200, { summaries: list, archived: s.archived || 0, compactions: s.compactions || 0 });
+    }
+  }
+}
+
+/* Uploads, file downloads, permission/question answers, abort and shutdown. */
+async function handleRunControlApi(req, res, url, method, pathname) {
+  if (pathname === '/api/upload' && method === 'POST') {
+    const limit = (Number(cfg.loadConfig().maxUploadMB) || 500) * 1048576;
+    return sendJson(res, 200, await attach.store(req, url.searchParams.get('name') || 'file', limit));
+  }
+  const up = pathname.match(/^\/api\/uploads\/([A-Za-z0-9][A-Za-z0-9._-]*)$/);
+  if (up && method === 'GET') {
+    const file = attach.fileOf(up[1]);
+    const st = await fs.promises.stat(file).catch(() => null);
+    if (!st) return sendJson(res, 404, { error: 'no such attachment' });
+    const ext = attach.extOf(up[1]);
+    const inlineImg = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }[ext];
+    res.writeHead(200, {
+      'Content-Type': inlineImg || 'application/octet-stream', 'Content-Length': st.size, 'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, max-age=3600',
+      ...(inlineImg ? {} : { 'Content-Disposition': `attachment; filename="${up[1].slice(9)}"` }),   // never render uploaded html/svg from our origin
+    });
+    return fs.createReadStream(file).pipe(res);
+  }
+
+  if (pathname === '/api/permission' && method === 'POST') {
+    const b = await readBody(req);
+    const p = pendingPermissions.get(b.id);
+    if (!p) throw new Error('no such pending permission');
+    pendingPermissions.delete(b.id);
+    p.resolve(['once', 'always'].includes(b.reply) ? b.reply : 'reject');
+    if (running.get(p.sessionId)) publish(running.get(p.sessionId), { type: 'permission_resolved', id: b.id, reply: b.reply });
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (pathname === '/api/answer' && method === 'POST') {
+    const b = await readBody(req);
+    const q = pendingQuestions.get(b.id);
+    if (!q) throw new Error('no such pending question');
+    pendingQuestions.delete(b.id);
+    q.resolve(String(b.answer ?? ''));
+    if (running.get(q.sessionId)) publish(running.get(q.sessionId), { type: 'question_resolved', id: b.id, answer: String(b.answer ?? '') });
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (pathname === '/api/shutdown' && method === 'POST') {
+    // refuse cross-site requests so a random web page can't stop the studio
+    const origin = req.headers.origin;
+    if (origin) { try { if (new URL(origin).host !== req.headers.host) return sendJson(res, 403, { error: 'forbidden' }); } catch { return sendJson(res, 403, { error: 'forbidden' }); } }
+    sendJson(res, 200, { ok: true });
+    console.log('shutdown requested from the UI');
+    setTimeout(() => process.exit(0), 150);   // 'exit' hooks stop background processes, MCP and LSP children
+    return;
+  }
+
+  if (pathname === '/api/abort' && method === 'POST') {
+    const b = await readBody(req);
+    running.get(b.sessionId)?.ac.abort();
+    return sendJson(res, 200, { ok: true });
+  }
+
+}
+
 async function handleApi(req, res, url) {
   const { pathname } = url;
   const method = req.method;
@@ -350,146 +498,13 @@ async function handleApi(req, res, url) {
     if (method === 'DELETE') return sendJson(res, 200, await ws.deleteFile(rel));
   }
 
-  /* --- sessions --- */
   if (seg[1] === 'sessions') {
-    if (seg.length === 2) {
-      if (method === 'GET') return sendJson(res, 200, { sessions: (await sessions.list()).map((r) => ({ ...r, running: running.has(r.id) })) });
-      if (method === 'POST') {
-        const b = await readBody(req);
-        const c = cfg.loadConfig();
-        return sendJson(res, 201, await sessions.create({ agent: b.agent || c.agent || 'build', model: b.model || c.model, title: b.title || '' }));
-      }
-    }
-    const id = seg[2];
-    if (seg.length === 3) {
-      if (method === 'GET') {
-        const s = await sessions.get(id);
-        // `history` = messages that were summarised out of the model's context: the chat still shows them unchanged (huge tool output is clipped for transport)
-        const history = (await sessions.archiveRead(id, s.archived || 0)).map((m) => (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 20000 ? { ...m, content: m.content.slice(0, 20000) + '\n… (clipped in the chat view; /export has everything)' } : m));
-        return sendJson(res, 200, { ...s, history, running: running.has(id), context: await contextInfo(s.model, s) });
-      }
-      if (method === 'DELETE') { running.get(id)?.ac.abort(); return sendJson(res, 200, await sessions.remove(id)); }
-      if (method === 'PUT' || method === 'PATCH') {
-        const b = await readBody(req);
-        const s = await sessions.get(id);
-        if (typeof b.title === 'string') s.title = b.title.slice(0, 120);
-        if (typeof b.agent === 'string' && agents.getAgent(b.agent, cfg.loadConfig())) s.agent = b.agent;
-        if (typeof b.model === 'string') s.model = b.model;
-        await sessions.save(s);
-        return sendJson(res, 200, sessions.summary(s));
-      }
-    }
-    if (seg.length === 4 && seg[3] === 'fork' && method === 'POST') {
-      const b = await readBody(req);
-      return sendJson(res, 201, await sessions.fork(id, b.upTo));
-    }
-    if (seg.length === 4 && seg[3] === 'rewind' && method === 'POST') {          // drop a user message and everything after it (Edit / Resend)
-      if (running.has(id)) throw new Error('session is running; stop it first');
-      const b = await readBody(req);
-      const s = await sessions.get(id);
-      const i = Number(b.index);
-      if (!Number.isInteger(i) || i < 0 || i >= s.messages.length || s.messages[i].role !== 'user' || s.messages[i].summary) throw new Error('can only rewind to one of your own messages');
-      s.messages = s.messages.slice(0, i);
-      s.lastPrompt = 0; s.lastCount = 0; s.revert = null; s.interrupted = false;
-      await sessions.save(s);
-      return sendJson(res, 200, { ok: true, messages: i });
-    }
-    if (seg.length === 5 && seg[3] === 'messages' && (method === 'PATCH' || method === 'PUT')) {   // edit an assistant reply in place
-      if (running.has(id)) throw new Error('session is running; stop it first');
-      const b = await readBody(req);
-      const s = await sessions.get(id);
-      const m = s.messages[parseInt(seg[4], 10)];
-      if (!m || m.summary || m.role !== 'assistant' || typeof b.content !== 'string') throw new Error('only assistant replies can be edited in place');
-      m.content = b.content;
-      await sessions.save(s);
-      return sendJson(res, 200, { ok: true });
-    }
-    if (seg.length === 4 && seg[3] === 'compact' && method === 'POST') {
-      const c = cfg.loadConfig();
-      const s = await sessions.get(id);
-      const r = await compactSession({ session: s, model: s.model || c.model, config: c });
-      return sendJson(res, 200, r);
-    }
-    if (seg.length === 4 && (seg[3] === 'undo' || seg[3] === 'redo') && method === 'POST') {
-      if (running.has(id)) throw new Error('session is running; stop it first');
-      const s = await sessions.get(id);
-      const r = seg[3] === 'undo' ? await journal.undo(s) : await journal.redo(s);
-      await sessions.save(s);
-      return sendJson(res, 200, r);
-    }
-    if (seg.length === 4 && seg[3] === 'export' && method === 'GET') {
-      const format = url.searchParams.get('format') === 'json' ? 'json' : 'md';
-      if (format === 'json') return sendJson(res, 200, await sessions.exportTree(id), { 'Content-Disposition': `attachment; filename="${id}.json"` });
-      const s = await sessions.get(id);
-      const md = require('./lib/export').toMarkdown(s, await sessions.transcript(s));
-      res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="${id}.md"` });
-      return res.end(md);
-    }
-    if (seg.length === 4 && seg[3] === 'summaries' && method === 'GET') {
-      const s = await sessions.get(id);
-      let list = s.summaries || [];
-      if (!list.length) {   // sessions summarised before summaries were recorded: show the live one
-        const live = s.messages.find((x) => x.summary && x.role === 'user');
-        if (live) list = [{ n: 1, ts: s.updatedAt, text: live.content.replace(/^Summary of the earlier conversation:\n/, ''), covered: null, legacy: true }];
-      }
-      return sendJson(res, 200, { summaries: list, archived: s.archived || 0, compactions: s.compactions || 0 });
-    }
+    await handleSessionsApi(req, res, url, seg, method);
+    if (res.headersSent) return;
   }
 
-  if (pathname === '/api/upload' && method === 'POST') {
-    const limit = (Number(cfg.loadConfig().maxUploadMB) || 500) * 1048576;
-    return sendJson(res, 200, await attach.store(req, url.searchParams.get('name') || 'file', limit));
-  }
-  const up = pathname.match(/^\/api\/uploads\/([A-Za-z0-9][A-Za-z0-9._-]*)$/);
-  if (up && method === 'GET') {
-    const file = attach.fileOf(up[1]);
-    const st = await fs.promises.stat(file).catch(() => null);
-    if (!st) return sendJson(res, 404, { error: 'no such attachment' });
-    const ext = attach.extOf(up[1]);
-    const inlineImg = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }[ext];
-    res.writeHead(200, {
-      'Content-Type': inlineImg || 'application/octet-stream', 'Content-Length': st.size, 'X-Content-Type-Options': 'nosniff',
-      'Cache-Control': 'private, max-age=3600',
-      ...(inlineImg ? {} : { 'Content-Disposition': `attachment; filename="${up[1].slice(9)}"` }),   // never render uploaded html/svg from our origin
-    });
-    return fs.createReadStream(file).pipe(res);
-  }
-
-  if (pathname === '/api/permission' && method === 'POST') {
-    const b = await readBody(req);
-    const p = pendingPermissions.get(b.id);
-    if (!p) throw new Error('no such pending permission');
-    pendingPermissions.delete(b.id);
-    p.resolve(['once', 'always'].includes(b.reply) ? b.reply : 'reject');
-    if (running.get(p.sessionId)) publish(running.get(p.sessionId), { type: 'permission_resolved', id: b.id, reply: b.reply });
-    return sendJson(res, 200, { ok: true });
-  }
-
-  if (pathname === '/api/answer' && method === 'POST') {
-    const b = await readBody(req);
-    const q = pendingQuestions.get(b.id);
-    if (!q) throw new Error('no such pending question');
-    pendingQuestions.delete(b.id);
-    q.resolve(String(b.answer ?? ''));
-    if (running.get(q.sessionId)) publish(running.get(q.sessionId), { type: 'question_resolved', id: b.id, answer: String(b.answer ?? '') });
-    return sendJson(res, 200, { ok: true });
-  }
-
-  if (pathname === '/api/shutdown' && method === 'POST') {
-    // refuse cross-site requests so a random web page can't stop the studio
-    const origin = req.headers.origin;
-    if (origin) { try { if (new URL(origin).host !== req.headers.host) return sendJson(res, 403, { error: 'forbidden' }); } catch { return sendJson(res, 403, { error: 'forbidden' }); } }
-    sendJson(res, 200, { ok: true });
-    console.log('shutdown requested from the UI');
-    setTimeout(() => process.exit(0), 150);   // 'exit' hooks stop background processes, MCP and LSP children
-    return;
-  }
-
-  if (pathname === '/api/abort' && method === 'POST') {
-    const b = await readBody(req);
-    running.get(b.sessionId)?.ac.abort();
-    return sendJson(res, 200, { ok: true });
-  }
+  await handleRunControlApi(req, res, url, method, pathname);
+  if (res.headersSent) return;
 
   if (pathname.startsWith('/api/fleet/') || pathname.startsWith('/api/memory/') || pathname === '/api/events') { if (await handleDashboardApi(req, res, url)) return; }
 
@@ -932,6 +947,7 @@ async function resolveProjectTrust(dir) {
       console.log(`               url: http://${shownHost}:${server.address().port}${tokenPart}${startup.sessionId ? `   (resuming ${startup.sessionId})` : ''}`);
       if (guard.tokenRequired) console.log('        access: a token is required because the server is reachable from other machines (keep that URL private)');
       else if (!process.env.OLLAMA_STUDIO_ALLOWED_HOSTS && !args.allowHosts.length) console.log('        access: loopback only (Host/Origin checked); use --host 0.0.0.0 for LAN access (then a token is required)');
+      if (!sandbox.enabled(cfg.loadConfig())) console.log('        sandbox: off, shell commands run directly on this machine (set "sandbox": true in config.json to isolate them in Docker)');
       const [maj, min] = process.versions.node.split('.').map(Number);
       if (maj < 22 || (maj === 22 && min < 5)) console.log(`        note: Node ${process.versions.node} has no node:sqlite, so long-term memory (recall) is disabled; use Node >= 22.5 for it`);
     });
