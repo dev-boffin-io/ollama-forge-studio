@@ -18,7 +18,8 @@ It assumes: you trust yourself, you do **not** automatically trust (a) web pages
 
 ## Out of scope / known limits
 
-- The model can do whatever you click *Allow* on, and `edit` is allowed by default. Use `permission` rules and the Docker sandbox for untrusted work.
+- The model can do whatever you click *Allow* on. Shell commands ask first (only harmless read-only commands such as `ls`, `pwd`, `git status` run silently), and `edit` is allowed by default. Use `permission` rules and the Docker sandbox for untrusted work; the sandbox is off by default and the studio prints a warning at startup when it is off.
+- `config.json` is written with mode `0600`, but Windows does not enforce POSIX modes, so that file is only as private as the Windows user profile.
 - DNS rebinding *between* the webfetch resolve step and the connection (TOCTOU).
 - Prompt injection cannot be fully prevented; it is mitigated by permission prompts.
 - The VS Code extension does not send the access token (works with the default loopback mode).

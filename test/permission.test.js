@@ -131,3 +131,10 @@ test('rulesFor: BASE_RULES come first so config/agent rules override them', () =
   assert.equal(P.evaluate('read', '.env.example', P.rulesFor({}, {}, [])).action, 'allow');
   assert.equal(P.evaluate('read', 'src/a.js', P.rulesFor({}, {}, [])).action, 'allow');
 });
+
+// Regression: shell commands ask by default; only harmless read-only commands run without a prompt.
+test('bash asks by default, read-only commands are allowed', () => {
+  const ctx = { agent: {}, config: {}, session: { grants: [] }, inherited: [] };
+  for (const c of ['ls -la', 'pwd', 'git status --short', 'node --version']) assert.equal(P.decideBash(c, ctx), 'allow', c);
+  for (const c of ['rm -rf x', 'npm test', 'echo hi > a.txt', 'ls && rm x']) assert.equal(P.decideBash(c, ctx), 'ask', c);
+});
