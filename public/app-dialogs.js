@@ -226,6 +226,29 @@ function closeMenu() { $('ctxMenu').hidden = true; menuFor = null; }
 
 function flash(text) { setStatus(text, 'ok'); setTimeout(() => { if ($('connStatus').textContent === text) setStatus(state.streaming ? 'working…' : 'ready', state.streaming ? 'busy' : 'ok'); }, 1400); }
 
+/** Lets the user select words/sentences inside one message (touch devices). */
+function selectMessageText(el) {
+  document.querySelectorAll('.msg.selectable').forEach(n => n.classList.remove('selectable'));
+  el.classList.add('selectable');
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  flash('select the text you need, then copy');
+}
+
+// Drop the "selectable" mode once the selection is gone or the user taps elsewhere.
+document.addEventListener('selectionchange', () => {
+  const s = window.getSelection();
+  if (!s || s.toString().trim()) return;
+  document.querySelectorAll('.msg.selectable').forEach(n => n.classList.remove('selectable'));
+});
+document.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('.msg.selectable, #ctxMenu')) return;
+  document.querySelectorAll('.msg.selectable').forEach(n => n.classList.remove('selectable'));
+}, true);
+
 function openMsgMenu(el, x, y) {
   if (menuFor === el && !$('ctxMenu').hidden) return;
   const idx = el.dataset.idx === undefined ? -1 : Number(el.dataset.idx);
@@ -238,6 +261,7 @@ function openMsgMenu(el, x, y) {
     { label: 'Copy text', hint: 'plain', run: () => window.copyToClipboard(isUser ? raw : window.markdownToText(raw)).then(() => flash('copied text')) },
     { label: 'Edit', disabled: busy, run: () => openEdit(idx, m, isUser) },
     { label: isUser ? 'Resend' : 'Regenerate', disabled: busy, run: () => resendFrom(idx, m, isUser) },
+    { label: 'Select text', run: () => selectMessageText(el) },
   ];
   const menu = $('ctxMenu');
   menu.innerHTML = '';
@@ -316,9 +340,10 @@ async function saveEdit() {
     const x = e.clientX, y = e.clientY;
     el.classList.add('pressing');
     press = { el, x, y, fired: false, timer: setTimeout(() => {
+      const s = window.getSelection && window.getSelection();
+      if (s && s.toString().trim()) { clear(); return; }      // user is selecting text natively: no menu
       press.fired = true; el.classList.remove('pressing');
       if (navigator.vibrate) navigator.vibrate(12);
-      const s = window.getSelection && window.getSelection(); if (s && s.removeAllRanges) s.removeAllRanges();
       openMsgMenu(el, x, y);
     }, 480) };
   });
@@ -329,7 +354,7 @@ async function saveEdit() {
     const el = e.target.closest('.msg.user, .msg.assistant');
     if (!el) return;
     const sel = window.getSelection && window.getSelection().toString();
-    if (sel && e.pointerType !== 'touch') return;                // right-click on a text selection: keep the browser's own menu
+    if (sel || el.classList.contains('selectable')) return;      // text selected: keep the browser's own Copy menu
     e.preventDefault();
     if (press && press.fired) return;                             // our long-press already opened it
     openMsgMenu(el, e.clientX, e.clientY);

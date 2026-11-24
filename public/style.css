@@ -326,7 +326,8 @@ select { min-width: 200px; }
 .ctxmenu small { color: var(--muted); font-size: 11px; }
 #editText { width: 100%; resize: vertical; min-height: 140px; }
 @media (pointer: coarse) {
-  .messages .msg.user, .messages .msg.assistant { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .messages .msg.user, .messages .msg.assistant { -webkit-touch-callout: default; }
+  .messages .msg.user.selectable, .messages .msg.assistant.selectable { -webkit-user-select: text; user-select: text; }
 }
 
 /* lazy file tree / long chats */

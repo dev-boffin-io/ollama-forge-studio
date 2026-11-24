@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **New:** skills are auto-shortlisted by relevance, with `skills.auto` controls and frontmatter `auto: false`; hidden extended skills can be loaded from disk via `skills.remotesPath` or embedded with `--with-remotes`, and local names win.
+- **New:** the message menu has a **Select text** action for touch devices, enabling native selection/copy of one message without suppressing the long-press menu elsewhere.
 - **New:** bundled operational agents and skills are available by default with scoped delegation rules.
 - **New:** `http_request` supports opt-in request/header details, full bodies as text or base64, workspace-contained `save_to`, binary request bodies, and redirects with host/private-address rechecks.
 - **New:** `--remote-max-mb` and `--remote-file-max-kb` cap how much remote-skill content is embedded in the single binary.
