@@ -208,7 +208,7 @@ async function addFiles(fileList) {
     try {
       const res = await fetch('/api/upload?name=' + encodeURIComponent(p.name), { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(res.status === 403 ? (data.error || 'forbidden') + ' — reload the page (Ctrl+F5) and try again' : (data.error || `HTTP ${res.status}`));
       p.id = data.id; p.status = 'ready';
     } catch (err) { p.status = 'error'; p.error = err.message; }
     renderAttachBar();
