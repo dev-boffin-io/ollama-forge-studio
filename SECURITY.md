@@ -8,7 +8,7 @@ It assumes: you trust yourself, you do **not** automatically trust (a) web pages
 
 | Threat | Mitigation |
 |---|---|
-| Malicious web page calls `http://127.0.0.1:<port>/api/*` (CSRF) | `Origin` / `Sec-Fetch-Site` checks, JSON-only writes |
+| Malicious web page calls `http://127.0.0.1:<port>/api/*` (CSRF) | `Origin` / `Sec-Fetch-Site` checks, JSON-only writes, and the `X-Studio-Client` header the UI sends (needs a CORS preflight that is never granted) so legitimate LAN / proxy use is not mistaken for cross-site |
 | DNS rebinding | Host-name allow-list while bound to loopback |
 | Other machines reach the server | token required for any non-loopback bind |
 | Opening an untrusted repo runs its plugins / local LSP binaries | project trust gate |

