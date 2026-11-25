@@ -40,3 +40,16 @@ test('ID_RE: attachment ids stay safe', () => {
   assert.ok(!attach.ID_RE.test('.hidden'));
   assert.ok(!attach.ID_RE.test(''));
 });
+
+test('imageProblem: complete pictures pass, cut-off / mislabelled / foreign files are flagged', () => {
+  const { imageProblem } = require('../lib/attach');
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40), Buffer.from('IEND\xaeB`\x82', 'latin1')]);
+  const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(40, 1), Buffer.from([0xff, 0xd9])]);
+  assert.equal(imageProblem(png, 'image/png'), '');
+  assert.equal(imageProblem(jpg, 'image/jpeg'), '');
+  assert.match(imageProblem(jpg.subarray(0, 30), 'image/jpeg'), /cut off/);
+  assert.match(imageProblem(png.subarray(0, 30), 'image/png'), /cut off/);
+  assert.match(imageProblem(png, 'image/jpeg'), /name says/);
+  assert.match(imageProblem(Buffer.alloc(64, 7), 'image/png'), /not a PNG/);
+  assert.match(imageProblem(Buffer.alloc(4), 'image/png'), /too small/);
+});
