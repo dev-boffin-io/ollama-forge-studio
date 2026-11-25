@@ -734,7 +734,9 @@ async function createFleetSession({ agent, model, title }) {
 
 {
   const c0 = cfg.loadConfig().fleet || {};
-  fleet.configure({ start: startFleetRun, createSession: createFleetSession, isRunning: (id) => running.has(id), isWaiting, maxParallel: c0.maxParallel, maxChain: c0.maxChain });
+  fleet.configure({ start: startFleetRun, createSession: createFleetSession, isRunning: (id) => running.has(id), isWaiting, maxParallel: c0.maxParallel, maxChain: c0.maxChain, maxChainRuns: c0.maxChainRuns });
+  require('./lib/locks').setLiveness((id) => running.has(id));   // a path claim only blocks another agent while its owner is really running
+  require('./lib/locks').attach(bus);                                // ... and is released as soon as that run ends
 }
 
 /** Fleet status joined with live session data (title, message count, running flag). */
@@ -882,7 +884,8 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  const verdict = guard.check(req, url);
+  let verdict;
+  try { verdict = guard.check(req, url); } catch (e) { log.warn('guard', `${req.method} ${url.pathname}: request guard failed`, e); return sendJson(res, 400, { error: 'bad request' }); }
   if (!verdict.ok) { log.warn('guard', `${req.method} ${url.pathname} refused: ${verdict.error}`); return sendJson(res, verdict.status, { error: verdict.error }); }
   if (verdict.setCookie) res.setHeader('Set-Cookie', verdict.setCookie);
   try {

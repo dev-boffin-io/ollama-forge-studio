@@ -117,7 +117,7 @@
     html += '<h4>Handoffs</h4>' + (f.links.length ? f.links.map((l) => `<div class="fl-link"><b>${escapeHtml(memberName(f, l.from))}</b> → <b>${escapeHtml(memberName(f, l.to))}</b><span class="pill">on ${escapeHtml(l.on)}</span><span class="hint-line" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.template ? escapeHtml(clip(l.template, 70)) : 'default handoff message'}</span><button class="btn small ghost" data-act="unlink" data-id="${escapeHtml(l.id)}" title="Remove handoff">✕</button></div>`).join('') : '<div class="hint-line">none — when an agent finishes, nothing starts automatically.</div>');
     if (f.members.length > 1) {
       const opts = f.members.map((m) => `<option value="${escapeHtml(m.sessionId)}">${escapeHtml(memberName(f, m.sessionId))}</option>`).join('');
-      html += `<form id="flLink" class="row" style="margin-top:6px"><select name="from">${opts}</select><span>→</span><select name="to">${opts}</select><select name="on"><option value="done">when done</option><option value="failed">when failed</option><option value="any">always</option></select><input type="text" name="template" placeholder="message template (optional): use {{result}} {{task}} {{from}}" style="flex:1 1 220px" /><button class="btn small" type="submit">+ Link</button><span id="flLinkErr" class="err"></span></form>`;
+      html += `<form id="flLink" class="row" style="margin-top:6px"><select name="from">${opts}</select><span>→</span><select name="to">${opts}</select><select name="on"><option value="done">when done</option><option value="failed">when failed</option><option value="any">when done or failed</option><option value="aborted">when aborted</option></select><input type="text" name="template" placeholder="message template (optional): use {{result}} {{task}} {{from}}" style="flex:1 1 220px" /><button class="btn small" type="submit">+ Link</button><span id="flLinkErr" class="err"></span></form>`;
     }
     html += '<h4>Live events</h4><div id="flTimeline" class="fl-timeline"></div>';
     root.innerHTML = html;
@@ -131,7 +131,7 @@
     const elapsed = m.status === 'running' && m.startedAt ? ` · ${ago(m.startedAt)}` : m.endedAt && m.startedAt ? ` · took ${Math.max(1, Math.round((m.endedAt - m.startedAt) / 1000))}s` : '';
     return `<div class="fl-card ${s}" data-sid="${escapeHtml(m.sessionId)}">` +
       `<div class="fl-head"><span class="fl-title" title="${escapeHtml(m.title || '')}"><span class="agent-badge ${escapeHtml(m.agent)}">${escapeHtml(m.agent)}</span> ${escapeHtml(clip(m.title || '(new)', 28))}</span><span class="pill ${s}">${label[s] || s}</span></div>` +
-      `<div class="fl-meta">${escapeHtml(m.model || 'default model')} · ${m.messageCount || 0} msgs · ${m.runs || 0} runs${elapsed}</div>` +
+      `<div class="fl-meta">${escapeHtml(m.model || 'default model')} · ${m.messageCount || 0} msgs · ${m.runs || 0} runs${elapsed}${Number(m.pending) > 0 ? ` · ⏳ ${Number(m.pending)} handoff(s) waiting` : ''}</div>` +
       (m.lastTask ? `<div class="fl-task"><b>Task:</b> ${escapeHtml(clip(m.lastTask, 180))}</div>` : '') +
       (m.lastError ? `<div class="err">${escapeHtml(m.lastError)}</div>` : '') +
       (m.lastResult ? `<details><summary class="hint-line">Last report</summary><pre>${escapeHtml(clip(m.lastResult, 3000))}</pre></details>` : '') +
