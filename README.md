@@ -189,8 +189,13 @@ The chat pane has three tabs.
   at once; the rest wait in a queue. Cards show live status (idle · queued · running · **needs input** · done · failed), the last
   task and the last report; *Open* jumps to the agent's chat (that is where you answer a permission prompt).
   **Handoffs** are triggers on the event bus: *"when A finishes → start B"* with A's final report put into B's message
-  (template placeholders `{{result}}`, `{{task}}`, `{{from}}`; `when done | failed | always`). Chains are capped at
-  `fleet.maxChain` (default 8) automatic hops so a loop A → B → A cannot run away. Fleets are saved per project in
+  (template placeholders `{{result}}`, `{{task}}`, `{{from}}`; `when done | failed | done or failed | aborted`). A handoff for an agent
+  that is busy is **parked** (shown as *⏳ N handoff(s) waiting*) and delivered, merged into one message, when that agent finishes;
+  a run you abort only triggers `when aborted` links and discards what was parked for it. Chains are capped twice: at
+  `fleet.maxChain` (default 8) automatic hops, and at `fleet.maxChainRuns` (default 12) model runs per task you dispatch, so neither a
+  loop A → B → A nor a fan-out can run away. Agents that run at the same time share one working directory, so a file that one of
+  them changed is **claimed** until its run ends: another running agent gets a clear error instead of overwriting it (reads are never
+  blocked; shell commands are not tracked). Fleets are saved per project in
   `~/.studio/<project>/fleets.json`; runs that were active when the studio stopped come back as idle.
 - **Memory** – the memory/context explorer: index size, semantic-index progress, the context meter of the open session
   (live vs. archived messages, compactions, summaries), the snippets that were injected into the last turn, and a search box
@@ -201,7 +206,7 @@ The chat pane has three tabs.
 
 ```jsonc
 // config.json
-{ "embedModel": "nomic-embed-text", "fleet": { "maxParallel": 3, "maxChain": 8 } }
+{ "embedModel": "nomic-embed-text", "fleet": { "maxParallel": 3, "maxChain": 8, "maxChainRuns": 12 } }
 ```
 
 ## Agents
@@ -538,7 +543,10 @@ tool (fail closed). Use `"*"` as the event key to run a hook for every event.
 ## Docker sandbox
 
 Set `sandbox.enabled` to run agent shell commands (and the user terminal) inside a fresh Docker container. The project
-is mounted at `/workspace` and the studio data folder at `/workspace/.studio`:
+is mounted at `/workspace`. The studio data folder (`config.json` holds hooks, MCP servers and permission rules that run on the
+host) is **not** mounted unless you set `mountStudio: true`, and then only read-only. `.git/config`, `.git/hooks` and plugin folders
+inside the project are mounted read-only, all Linux capabilities are dropped (`capDrop`), and on POSIX the container runs as your
+user id instead of root (set `user` to override):
 
 ```json
 "sandbox": {
@@ -553,7 +561,7 @@ is mounted at `/workspace` and the studio data folder at `/workspace/.studio`:
 
 Use `"mount": "ro"` for a read-only project, `"network": "bridge"` when the agent must install packages, and
 `"extraArgs"` for additional `docker run` flags. `user`, `env`, `pidsLimit`, `init`, `noNewPrivileges`,
-`readOnlyRootfs`, `mountStudio` and `docker` (the binary) are also configurable. Sandboxing is **fail closed**: if
+`readOnlyRootfs`, `capDrop`, `protectPaths`, `mountStudio` and `docker` (the binary) are also configurable. Sandboxing is **fail closed**: if
 Docker or its daemon is unavailable, commands fail instead of silently running on the host. Check availability with
 `GET /api/sandbox`. Docker is not bundled with the studio. The sandbox covers agent `bash` and terminal commands;
 hooks and plugin tools run in the studio process (plugins are trusted code).
@@ -773,7 +781,10 @@ lib/runtime.js       source vs. single-executable differences (embedded assets)
 lib/recall.js        SQLite FTS5 history index + keyword retrieval (+ optional vectors, hybrid search)
 lib/embed.js         optional embedding client (Ollama /api/embed, OpenAI /embeddings)
 lib/events.js        in-process event bus (feeds fleets, the dashboard stream, plugins)
-lib/fleet.js         FleetManager: agent groups, dispatch queue, event-driven handoffs
+lib/fleet.js         FleetManager: agent groups, dispatch queue, event-driven handoffs (parking, run budget)
+lib/protect.js       paths the agent may never write (studio config, .git, plugins)
+lib/gitsafe.js       detects git config that makes status/diff run programs
+lib/locks.js         path claims between agents that run at the same time
 public/panels.js     Chat / Fleet / Memory tabs
 lib/attach.js        chat attachments: storage, text extraction, vision/OCR fallbacks
 public/markdown.js   markdown renderer for chat messages
