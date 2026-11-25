@@ -79,3 +79,41 @@ test('forced token (OLLAMA_STUDIO_TOKEN) also works on loopback', () => {
   assert.equal(run(g, 'GET', '/api/state', { host: 'anything.example' }).status, 401);
   assert.equal(run(g, 'GET', '/api/state', { host: 'anything.example', authorization: 'Bearer sekret-sekret-sekret-sekret' }).ok, true);
 });
+
+test('UI header: a request from the studio page passes even when Origin/Host/Sec-Fetch-Site disagree (LAN phone, proxy, tunnel)', () => {
+  const g = createGuard({ bindHost: '0.0.0.0' });
+  const base = { host: '127.0.0.1:4310', authorization: 'Bearer ' + g.token, 'x-studio-client': 'web' };
+  // proxy rewrote Host, browser sent the public Origin
+  assert.equal(run(g, 'POST', '/api/upload', { ...base, origin: 'http://192.168.1.20:8080', 'content-type': 'image/jpeg', 'content-length': '9' }).ok, true);
+  // browser labelled the request same-site / cross-site
+  assert.equal(run(g, 'POST', '/api/upload', { ...base, 'sec-fetch-site': 'same-site', 'content-type': 'image/jpeg', 'content-length': '9' }).ok, true);
+  assert.equal(run(g, 'POST', '/api/chat', { ...base, 'sec-fetch-site': 'cross-site', ...JSON_H }).ok, true);
+  // the header does not replace the token or the content-type rule
+  assert.equal(run(g, 'POST', '/api/chat', { host: '127.0.0.1:4310', 'x-studio-client': 'web', ...JSON_H }).status, 401);
+  assert.equal(run(g, 'POST', '/api/config', { ...base, 'content-type': 'text/plain', 'content-length': '5' }).status, 415);
+});
+
+test('without the UI header a foreign Origin is still refused (a hostile page cannot add it: custom headers need a preflight)', () => {
+  const g = createGuard({ bindHost: '127.0.0.1' });
+  const evil = { host: '127.0.0.1:4310', origin: 'http://evil.example' };
+  assert.equal(run(g, 'POST', '/api/upload', { ...evil, 'content-type': 'image/png', 'content-length': '9' }).status, 403);
+  assert.equal(run(g, 'POST', '/api/upload', { ...evil, 'x-studio-client': 'nope', 'content-type': 'image/png', 'content-length': '9' }).status, 403);
+});
+
+test('proxies: forwarded host and listed origins count as same-origin; others do not', () => {
+  const g = createGuard({ bindHost: '127.0.0.1', extraHosts: ['studio.lan'], extraOrigins: ['http://192.168.1.20:8080', 'tunnel.example'] });
+  const host = { host: '127.0.0.1:4310', ...JSON_H };
+  assert.equal(run(g, 'POST', '/api/chat', { ...host, origin: 'http://192.168.1.20:8080' }).ok, true);
+  assert.equal(run(g, 'POST', '/api/chat', { ...host, origin: 'https://tunnel.example' }).ok, true);
+  assert.equal(run(g, 'POST', '/api/chat', { ...host, origin: 'http://studio.lan', 'x-forwarded-host': 'studio.lan' }).ok, true);
+  assert.equal(run(g, 'POST', '/api/chat', { ...host, origin: 'http://192.168.1.21:8080' }).status, 403);
+  assert.equal(run(g, 'POST', '/api/chat', { ...host, origin: 'http://evil.example', 'x-forwarded-host': 'studio.lan' }).status, 403);
+});
+
+test('isSameOrigin (used by /api/shutdown)', () => {
+  const g = createGuard({ bindHost: '127.0.0.1' });
+  assert.equal(g.isSameOrigin({ headers: { host: 'localhost:4310' } }), true);
+  assert.equal(g.isSameOrigin({ headers: { host: 'localhost:4310', origin: 'http://localhost:4310' } }), true);
+  assert.equal(g.isSameOrigin({ headers: { host: 'localhost:4310', origin: 'http://evil.example' } }), false);
+  assert.equal(g.isSameOrigin({ headers: { host: 'localhost:4310', origin: 'http://evil.example', 'x-studio-client': 'web' } }), true);
+});

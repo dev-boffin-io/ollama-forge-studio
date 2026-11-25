@@ -51,7 +51,7 @@ process.on('exit', () => { try { plugins.unload(); } catch { /* shutting down */
 /* ---------- CLI:  ollama-forge-studio [dir] [--port N] [--host H] [-c | --continue] [-s ID] [--agent NAME] ---------- */
 
 function parseArgs(argv) {
-  const o = { dir: null, port: Number(process.env.PORT || 4310), host: process.env.HOST || '127.0.0.1', cont: false, session: null, agent: null, trust: false, allowHosts: [] };
+  const o = { dir: null, port: Number(process.env.PORT || 4310), host: process.env.HOST || '127.0.0.1', cont: false, session: null, agent: null, trust: false, allowHosts: [], allowOrigins: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--port' || a === '-p') o.port = Number(argv[++i]);
@@ -62,8 +62,9 @@ function parseArgs(argv) {
     else if (a === '--agent') o.agent = argv[++i];
     else if (a === '--trust') o.trust = true;
     else if (a === '--allow-host') o.allowHosts.push(argv[++i]);
+    else if (a === '--allow-origin') o.allowOrigins.push(argv[++i]);
     else if (a === '-h' || a === '--help') {
-      console.log('usage: ollama-forge-studio [dir] [--port N] [--host H] [-c|--continue] [-s <session-id>] [--agent <name>] [--trust] [--allow-host NAME]');
+      console.log('usage: ollama-forge-studio [dir] [--port N] [--host H] [-c|--continue] [-s <session-id>] [--agent <name>] [--trust] [--allow-host NAME] [--allow-origin URL]');
       process.exit(0);
     } else if (!a.startsWith('-') && !o.dir) o.dir = a;
   }
@@ -76,6 +77,7 @@ const guard = createGuard({
   bindHost: args.host,
   token: process.env.OLLAMA_STUDIO_TOKEN || '',
   extraHosts: [...String(process.env.OLLAMA_STUDIO_ALLOWED_HOSTS || '').split(','), ...args.allowHosts],
+  extraOrigins: [...String(process.env.OLLAMA_STUDIO_ALLOWED_ORIGINS || '').split(','), ...args.allowOrigins],
 });
 const PUBLIC_DIR = cfg.APP_ROOT ? path.join(cfg.APP_ROOT, 'public') : null; // null in the single-executable build (assets are embedded)
 
@@ -292,9 +294,8 @@ async function handleRunControlApi(req, res, url, method, pathname) {
   }
 
   if (pathname === '/api/shutdown' && method === 'POST') {
-    // refuse cross-site requests so a random web page can't stop the studio
-    const origin = req.headers.origin;
-    if (origin) { try { if (new URL(origin).host !== req.headers.host) return sendJson(res, 403, { error: 'forbidden' }); } catch { return sendJson(res, 403, { error: 'forbidden' }); } }
+    // refuse cross-site requests so a random web page can't stop the studio (same rule as the guard: UI header, or matching Origin)
+    if (!guard.isSameOrigin(req)) return sendJson(res, 403, { error: 'forbidden' });
     sendJson(res, 200, { ok: true });
     console.log('shutdown requested from the UI');
     setTimeout(() => process.exit(0), 150);   // 'exit' hooks stop background processes, MCP and LSP children
