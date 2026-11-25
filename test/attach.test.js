@@ -44,12 +44,22 @@ test('ID_RE: attachment ids stay safe', () => {
 test('imageProblem: complete pictures pass, cut-off / mislabelled / foreign files are flagged', () => {
   const { imageProblem } = require('../lib/attach');
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40), Buffer.from('IEND\xaeB`\x82', 'latin1')]);
-  const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(40, 1), Buffer.from([0xff, 0xd9])]);
+  const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0xff, 0xda, 0, 2]), Buffer.alloc(40, 1), Buffer.from([0xff, 0xd9])]);
   assert.equal(imageProblem(png, 'image/png'), '');
   assert.equal(imageProblem(jpg, 'image/jpeg'), '');
-  assert.match(imageProblem(jpg.subarray(0, 30), 'image/jpeg'), /cut off/);
+  assert.match(imageProblem(jpg.subarray(0, 30), 'image/jpeg'), /cut off/);   // SOS present, EOI missing
   assert.match(imageProblem(png.subarray(0, 30), 'image/png'), /cut off/);
   assert.match(imageProblem(png, 'image/jpeg'), /name says/);
   assert.match(imageProblem(Buffer.alloc(64, 7), 'image/png'), /not a PNG/);
   assert.match(imageProblem(Buffer.alloc(4), 'image/png'), /too small/);
+});
+
+test('imageProblem: JPEG with data after the end marker (phone screenshots) is fine; cut-off one is not', () => {
+  const { imageProblem } = require('../lib/attach');
+  const thumb = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xda, 0, 2]), Buffer.alloc(8, 3), Buffer.from([0xff, 0xd9])]);   // EXIF thumbnail with its own SOS/EOI
+  const main = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0, 20]), thumb, Buffer.from([0xff, 0xda, 0, 2]), Buffer.alloc(500, 5), Buffer.from([0xff, 0xd9])]);
+  const trailer = Buffer.concat([main, Buffer.from('MiMetaData\0'.repeat(30), 'latin1')]);
+  assert.equal(imageProblem(main, 'image/jpeg'), '');
+  assert.equal(imageProblem(trailer, 'image/jpeg'), '', 'trailing vendor data must not be reported as truncation');
+  assert.match(imageProblem(main.subarray(0, main.length - 200), 'image/jpeg'), /cut off/);
 });

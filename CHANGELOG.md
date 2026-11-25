@@ -4,7 +4,7 @@
 
 ### Image attachments
 
-- **Fix:** one damaged, cut-off or mislabelled picture (e.g. an interrupted phone upload) made Ollama answer `400 Failed to load image or audio file` on every later request, because the last 4 images are re-sent each time. Pictures are now checked (signature, PNG/JPEG end marker) when attached and before every send; bad ones fall back to vision-model/OCR/path mode with a note.
+- **Fix:** one damaged, cut-off or mislabelled picture (e.g. an interrupted phone upload) made Ollama answer `400 Failed to load image or audio file` on every later request, because the last 4 images are re-sent each time. Pictures are now checked (signature, and that an end-of-image/IEND marker exists — trailing vendor data after it is allowed) when attached and before every send; bad ones fall back to vision-model/OCR/path mode with a note.
 - **Fix:** if Ollama still reports it cannot load an image, the turn is retried once without pictures (the model is told) instead of failing.
 - **Fix:** an upload that arrives shorter than its `Content-Length` is rejected instead of stored.
 
