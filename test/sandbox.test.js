@@ -24,7 +24,7 @@ test('sandbox is disabled by default and commandSpec returns null', () => {
   assert.deepEqual(sandbox.status({}), { enabled: false, available: false, image: 'node:20-bookworm', network: 'none', error: '' });
 });
 
-test('commandSpec builds a hardened docker run command with the project and studio mounts', () => {
+test('commandSpec builds a hardened docker run command (project mount; studio folder only on request, read-only)', () => {
   const spec = sandbox.commandSpec('echo hi', enabled, { workDir: ctx.dir, studioDir: ctx.studioDir, container: 'ofs-test' });
   assert.equal(spec.cmd, 'docker');
   assert.equal(spec.container, 'ofs-test');
@@ -33,7 +33,10 @@ test('commandSpec builds a hardened docker run command with the project and stud
     assert.ok(spec.args.includes(part), `expected ${part} in ${spec.args.join(' ')}`);
   }
   assert.ok(spec.args.includes(`${ctx.dir}:/workspace:rw`));
-  assert.ok(spec.args.includes(`${ctx.studioDir}:/workspace/.studio:rw`));
+  assert.ok(!spec.args.some((a) => a.includes('/workspace/.studio')), 'the studio data folder (config.json = hooks/MCP/permissions) is NOT mounted by default');
+  assert.ok(spec.args.includes('--cap-drop') && spec.args.includes('ALL'), 'all capabilities are dropped by default');
+  const opt = sandbox.commandSpec('echo hi', { sandbox: { ...enabled.sandbox, mountStudio: true } }, { workDir: ctx.dir, studioDir: ctx.studioDir, container: 'ofs-test' });
+  assert.ok(opt.args.includes(`${ctx.studioDir}:/workspace/.studio:ro`), 'opt-in studio mount is read-only');
   assert.ok(spec.args.includes('-w'));
   assert.ok(spec.args.includes('/workspace'));
   assert.ok(spec.args.includes('FOO=bar'));
