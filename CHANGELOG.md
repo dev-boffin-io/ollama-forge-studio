@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Studio data folder (`.studio/…`)
+
+- **Fix:** the agent addresses its data folder as `.studio/…` (file tools resolve that alias to `~/.studio/<project>-<hash>/…`), but a shell does not, so `unzip .studio/uploads/x.zip` looked inside the project and failed. Commands that run on the host now have a standalone `.studio` / `./.studio` word rewritten to the real folder (after the permission check; `~/.studio`, `$HOME/.studio`, `foo/.studio` are untouched).
+- **New:** the system prompt now names the real data folder and lists what lives there (uploads, tool-output, plans, agents, skills, commands, protected internals) and says never to look for `.studio` in the working directory.
+
 ### Image attachments
 
 - **Fix:** one damaged, cut-off or mislabelled picture (e.g. an interrupted phone upload) made Ollama answer `400 Failed to load image or audio file` on every later request, because the last 4 images are re-sent each time. Pictures are now checked (signature, and that an end-of-image/IEND marker exists — trailing vendor data after it is allowed) when attached and before every send; bad ones fall back to vision-model/OCR/path mode with a note.
